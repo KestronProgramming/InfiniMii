@@ -12,3 +12,6 @@ env.json
 FFLResHigh.dat
 testFiles
 temp
+feedback.txt
+serveFeedback.js
+migrate.js

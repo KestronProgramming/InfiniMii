@@ -1,13 +1,76 @@
 const mongoose = require("mongoose");
-const { mongooseLeanVirtuals } = require("mongoose-lean-virtuals");
-mongoose.plugin(mongooseLeanDefaults);
-mongoose.set("setDefaultsOnInsert", false);
 
-// let templateSchema = new mongoose.Schema({
-//     field: { type: String, required: true }
-// })
-// const Templates = mongoose.model("template", templateSchema);
+mongoose.set("strictQuery", true);
+
+// --- Schemas --- //
+const miiSchema = new mongoose.Schema({
+    id: { type: String, required: true, unique: true, index: true },
+    uploader: { type: String, required: true, index: true },
+    desc: { type: String, default: "" },
+    votes: { type: Number, default: 0 },
+    official: { type: Boolean, default: false, index: true },
+    uploadedOn: { type: Number, default: () => Date.now(), index: true },
+    console: { type: String, default: "3DS" },
+    general: mongoose.Schema.Types.Mixed,
+    meta: mongoose.Schema.Types.Mixed,
+    perms: mongoose.Schema.Types.Mixed,
+    hair: mongoose.Schema.Types.Mixed,
+    face: mongoose.Schema.Types.Mixed,
+    eyes: mongoose.Schema.Types.Mixed,
+    eyebrows: mongoose.Schema.Types.Mixed,
+    nose: mongoose.Schema.Types.Mixed,
+    mouth: mongoose.Schema.Types.Mixed,
+    beard: mongoose.Schema.Types.Mixed,
+    glasses: mongoose.Schema.Types.Mixed,
+    mole: mongoose.Schema.Types.Mixed,
+    officialCategories: { type: [String], default: [] },
+    published: { type: Boolean, default: true, index: true },
+    private: { type: Boolean, default: false, index: true }, //TODO_DB: verify published vs private
+    blockedFromPublishing: { type: Boolean, default: false },
+    blockReason: { type: String, default: "" }
+}, { timestamps: true, minimize: false });
+
+const userSchema = new mongoose.Schema({
+    username: { type: String, required: true, unique: true, index: true },
+    salt: String,
+    pass: String,
+    verificationToken: String,
+    creationDate: { type: Number, default: () => Date.now() },
+    email: String,
+    votedFor: { type: [String], default: [] },
+    submissions: { type: [String], default: [] },
+    miiPfp: { type: String, default: "00000" },
+    roles: { type: [String], default: ["basic"] },
+    moderator: { type: Boolean, default: false },
+    token: String,
+    verified: { type: Boolean, default: false },
+    privateMiis: { type: [String], default: [] },
+    isBanned: { type: Boolean, default: false },
+    banExpires: Number,
+    banReason: String
+}, { timestamps: true, minimize: false });
+
+const settingsSchema = new mongoose.Schema({
+    _id: { type: String, required: true },
+    highlightedMii: { type: String, default: null },
+    highlightedMiiChangeDay: { type: Number, default: null },
+    bannedIPs: { type: [String], default: [] },
+    officialCategories: { type: mongoose.Schema.Types.Mixed, default: { categories: [] } }
+}, { _id: false, minimize: false });
+
+// --- Models --- //
+const Mii = mongoose.model("Mii", miiSchema);
+const User = mongoose.model("User", userSchema);
+const Settings = mongoose.model("Settings", settingsSchema);
+
+// --- Connection --- //
+const connectionPromise = mongoose.connect("mongodb://localhost:27017/infinimii", {
+    autoIndex: true
+});
 
 module.exports = {
-    connectionPromise: mongoose.connect(`mongodb://localhost:27017/infinimii`)
-}
+    connectionPromise,
+    Mii,
+    User,
+    Settings
+};

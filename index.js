@@ -1,14 +1,14 @@
+
 const miijs = require("miijs");
 const crypto = require('crypto');
 const fs = require("fs");
 const ejs = require('ejs');
 const express = require("express");
 const path = require("path");
-const storage = require("./storage.json");
 const nodemailer = require("nodemailer");
 const cookieParser = require('cookie-parser');
 const compression = require('compression');
-const { connectionPromise } = require("./database");
+const { connectionPromise, Mii, User, Settings } = require("./database");
 var multer = require('multer');
 var upload = multer({ dest: 'uploads/' });
 var globalSalt = process.env.salt;
@@ -21,12 +21,94 @@ fs.readdirSync("./partials").forEach(file=>{
     if(!file.endsWith(".html")) return;
     partials[file.split(".")[0]]=fs.readFileSync(`./partials/${file}`,"utf-8");
 });
+
+// ========== DATABASE ACCESS LAYER ========== //
+async function getSettings() {
+    let settings = await Settings.findById("global");
+    if (!settings) {
+        settings = await Settings.create({
+            _id: "global",
+            highlightedMii: null,
+            highlightedMiiChangeDay: null,
+            bannedIPs: [],
+            officialCategories: { categories: [] }
+        });
+    }
+    return settings;
+}
+
+async function updateSettings(updates) {
+    return await Settings.findByIdAndUpdate("global", updates, { new: true, upsert: true });
+}
+
+async function getAllMiis(includePrivate = false) {
+    const query = includePrivate ? {} : { private: false };
+    return await Mii.find(query).lean();
+}
+
+async function getMiiById(id, includePrivate = false) {
+    const query = { id };
+    if (!includePrivate) query.private = false;
+    return await Mii.findOne(query).lean();
+}
+
+async function getUserByUsername(username) {
+    return await User.findOne({ username }).lean();
+}
+
+async function getAllUsers() {
+    return await User.find({}).lean();
+}
+
 async function getSendables(req,title){
     const currentPath = req.path;
     const queryString = Object.keys(req.query).length > 0 
         ? '?' + new URLSearchParams(req.query).toString() 
         : '';
-    var send=Object.assign(structuredClone(storage),{howToTitle:"How To" ,currentPath: currentPath + queryString, thisUser: req.cookies.username||"Default", pfp: storage.users[req.cookies.username||"Default"].miiPfp, query:req.query, discordInvite:process.env.discordInvite, githubLink:process.env.githubLink, baseUrl:baseUrl, title:title});
+    
+    const settings = await getSettings();
+    const allMiis = await getAllMiis(false);
+    const allUsers = await getAllUsers();
+    
+    // Build miis object
+    const miisObj = {};
+    allMiis.forEach(mii => miisObj[mii.id] = mii);
+    
+    // Build users object
+    const usersObj = {};
+    allUsers.forEach(user => usersObj[user.username] = user);
+    
+    // Ensure default user exists
+    if (!usersObj.Default) {
+        usersObj.Default = {
+            username: "Default",
+            miiPfp: "00000",
+            votedFor: [],
+            submissions: [],
+            roles: []
+        };
+    }
+    
+    const currentUser = req.cookies.username || "Default";
+    const pfp = usersObj[currentUser]?.miiPfp || "00000";
+    
+    var send = {
+        miis: miisObj,
+        users: usersObj,
+        highlightedMii: settings.highlightedMii,
+        bannedIPs: settings.bannedIPs,
+        officialCategories: settings.officialCategories,
+        howToTitle: "How To",
+        currentPath: currentPath + queryString,
+        thisUser: currentUser,
+        pfp: pfp,
+        query: req.query,
+        discordInvite: process.env.discordInvite,
+        githubLink: process.env.githubLink,
+        baseUrl: baseUrl,
+        title: title
+    };
+    
     send.partials=structuredClone(partials);
     
     // Render EJS partials synchronously
@@ -103,7 +185,7 @@ function isAdmin(user) {
     return hasRole(user, ROLES.ADMINISTRATOR);
 }
 
-function isBanned(user) {
+async function isBanned(user) {
     const roles = getUserRoles(user);
     if (roles.includes(ROLES.PERM_BANNED)) return true;
     if (roles.includes(ROLES.TEMP_BANNED)) {
@@ -114,7 +196,10 @@ function isBanned(user) {
             // Unban user - remove temp ban role
             user.roles = user.roles.filter(r => r !== ROLES.TEMP_BANNED);
             delete user.banExpires;
-            save();
+            await User.findOneAndUpdate({ username: user.username }, { 
+                roles: user.roles,
+                $unset: { banExpires: 1 }
+            });
             return false;
         }
         return true;
@@ -147,8 +232,8 @@ function removeRole(user, role) {
 // Category Tree Helper Functions
 
 // Find a category node by path
-function findCategoryByPath(path, tree = storage.officialCategories.categories) {
-    if (!path) return null;
+function findCategoryByPath(path, tree) {
+    if (!path || !tree) return null;
     
     const parts = path.split('/');
     let current = tree;
@@ -163,8 +248,10 @@ function findCategoryByPath(path, tree = storage.officialCategories.categories) 
     return null;
 }
 
+// TODO_DB: verify
 // Get all leaf categories (categories with no children) as flat array
-function getAllLeafCategories(tree = storage.officialCategories.categories, result = []) {
+function getAllLeafCategories(tree, result = []) {
+    if (!tree) return result;
     tree.forEach(node => {
         if (node.children && node.children.length > 0) {
             getAllLeafCategories(node.children, result);
@@ -176,7 +263,8 @@ function getAllLeafCategories(tree = storage.officialCategories.categories, resu
 }
 
 // Get all categories (including parents) as flat array with paths
-function getAllCategoriesFlat(tree = storage.officialCategories.categories, result = []) {
+function getAllCategoriesFlat(tree, result = []) {
+    if (!tree) return result;
     tree.forEach(node => {
         result.push(node);
         if (node.children && node.children.length > 0) {
@@ -197,8 +285,8 @@ function updateCategoryPaths(node, parentPath = '') {
 }
 
 // Find parent of a category by path
-function findParentByChildPath(path, tree = storage.officialCategories.categories, parent = null) {
-    if (!path) return null;
+function findParentByChildPath(path, tree, parent = null) {
+    if (!path || !tree) return null;
     
     for (const node of tree) {
         if (node.path === path) {
@@ -214,52 +302,47 @@ function findParentByChildPath(path, tree = storage.officialCategories.categorie
 }
 
 // Rename category in all Miis that use it
-function renameCategoryInAllMiis(oldPath, newPath) {
+async function renameCategoryInAllMiis(oldPath, newPath) {
     let count = 0;
     
-    // Update published Miis
-    Object.values(storage.miis).forEach(mii => {
-        if (mii.official && mii.officialCategories && mii.officialCategories.includes(oldPath)) {
-            const index = mii.officialCategories.indexOf(oldPath);
-            mii.officialCategories[index] = newPath;
-            count++;
-        }
+    // Update all Miis (published and private)
+    const miis = await Mii.find({
+        official: true,
+        officialCategories: oldPath
     });
     
-    // Update private Miis
-    if (storage.privateMiis) {
-        Object.values(storage.privateMiis).forEach(mii => {
-            if (mii.official && mii.officialCategories && mii.officialCategories.includes(oldPath)) {
-                const index = mii.officialCategories.indexOf(oldPath);
-                mii.officialCategories[index] = newPath;
-                count++;
-            }
-        });
+    for (const mii of miis) {
+        const index = mii.officialCategories.indexOf(oldPath);
+        if (index > -1) {
+            mii.officialCategories[index] = newPath;
+            await Mii.findOneAndUpdate(
+                { id: mii.id },
+                { $set: { officialCategories: mii.officialCategories } }
+            );
+            count++;
+        }
     }
     
     return count;
 }
 
 // Remove category from all Miis
-function removeCategoryFromAllMiis(path) {
+async function removeCategoryFromAllMiis(path) {
     let count = 0;
     
-    // Update published Miis
-    Object.values(storage.miis).forEach(mii => {
-        if (mii.official && mii.officialCategories && mii.officialCategories.includes(path)) {
-            mii.officialCategories = mii.officialCategories.filter(c => c !== path);
-            count++;
-        }
+    // Update all Miis
+    const miis = await Mii.find({
+        official: true,
+        officialCategories: path
     });
     
-    // Update private Miis
-    if (storage.privateMiis) {
-        Object.values(storage.privateMiis).forEach(mii => {
-            if (mii.official && mii.officialCategories && mii.officialCategories.includes(path)) {
-                mii.officialCategories = mii.officialCategories.filter(c => c !== path);
-                count++;
-            }
-        });
+    for (const mii of miis) {
+        mii.officialCategories = mii.officialCategories.filter(c => c !== path);
+        await Mii.findOneAndUpdate(
+            { id: mii.id },
+            { $set: { officialCategories: mii.officialCategories } }
+        );
+        count++;
     }
     
     return count;
@@ -301,19 +384,19 @@ function validate(what) {
     return /^(\d|\D){1,15}$/.test(what);
 }
 
-function save() {
-    fs.writeFileSync("./storage.json", JSON.stringify(storage));
-}
+// save() function no longer needed - direct DB writes
 
 //Possibly able to generate 9 Billion IDs before needing a new character, which I doubt we'll ever hit
-function genId() {
+async function genId() {
     let ret = "";
     let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    while (Object.keys(storage.miis).includes(ret) || ret === "") {
+    let exists = true;
+    while (exists || ret === "") {
         ret = "";
         for (var i = 0; i < 5; i++) {
             ret += chars[Math.floor(Math.random() * chars.length)];
         }
+        exists = await Mii.exists({ id: ret });
     }
     return ret;
 }
@@ -336,52 +419,52 @@ function wilsonMethod(upvotes, uploadedOn) {
     
     return hotness;
 }
-function api(what,limit=50,begin=0,fltr){
-    var returnableMiis=structuredClone(storage.miis);
-    delete returnableMiis.average;
+
+async function api(what,limit=50,begin=0,fltr){
+    const allMiis = await Mii.find({ private: false, id: { $ne: "average" } }).lean();
+    const settings = await getSettings();
+    
     var newArr;
     switch(what){
         case "all":
-            return returnableMiis;
+            return allMiis;
         break;
         case "highlightedMii":
-            return returnableMiis[storage.highlightedMii];
+            return await getMiiById(settings.highlightedMii);
         break;
         case "getMii":
-            return returnableMiis[fltr];
+            return await getMiiById(fltr);
         break;
         case "random":
-            newArr = shuffleArray(Object.values(returnableMiis));
+            newArr = shuffleArray([...allMiis]);
         break;
         case "top":
-            newArr = Object.values(returnableMiis);
+            newArr = [...allMiis];
             newArr.sort((a, b) => {
                 return wilsonMethod(b.votes, b.uploadedOn) - wilsonMethod(a.votes, a.uploadedOn);
             });
         break;
         case "best":
-            newArr = Object.values(returnableMiis);
+            newArr = [...allMiis];
             newArr.sort((a, b) => {
                 return b.votes - a.votes;
             });
         break;
         case "recent":
-            newArr=Object.values(returnableMiis);
+            newArr=[...allMiis];
             newArr.sort((a, b) => {
                 return b.uploadedOn - a.uploadedOn;
             });
         break;
         case "official":
-            newArr = Object.values(returnableMiis).filter(mii=>{
-                return mii.official;
-            });
+            newArr = allMiis.filter(mii => mii.official);
             newArr.sort((a, b) => {
                 return b.votes - a.votes;
             });
         break;
         case "search":
             fltr = fltr.toLowerCase();
-            newArr = Object.values(returnableMiis).filter(mii=>{
+            newArr = allMiis.filter(mii=>{
                 return mii.meta.name.toLowerCase().includes(fltr)||mii.desc.toLowerCase().includes(fltr)||mii.uploader.toLowerCase().includes(fltr);
             });
             //Needs to sort by relevancy at some point
@@ -523,9 +606,10 @@ function populateNestedArrays(arrayObj, obj) {
     }
     return ret;
 }
-function getCollectedLeavesAcrossMiis() {
+async function getCollectedLeavesAcrossMiis() {
+    const allMiis = await Mii.find({ private: false }).lean();
     let acc;
-    for (const mii of Object.values(storage.miis)) {
+    for (const mii of allMiis) {
         acc = acc ? populateNestedArrays(acc, mii) : getNestedAsArrays(mii);
     }
     return acc;
@@ -626,15 +710,26 @@ function averageObjectWithPairs(node, parentKey = "") {
     }
     return out;
 }
-function getAverageMii(){
-    var avg=averageObjectWithPairs(getCollectedLeavesAcrossMiis());
+async function getAverageMii(){
+    const leaves = await getCollectedLeavesAcrossMiis();
+    var avg=averageObjectWithPairs(leaves);
+    delete avg._id;
     avg.id = "average";
     avg.meta = { name: `J${avg.general.gender===0?"ohn":"ane"} Doe`, creatorName: "InfiniMii", type:"3ds" };
     avg.desc="The most common or average features and placements of those features across all Miis on the website";
     avg.uploader = "Everyone";
     avg.votes = 0;
     avg.uploadedOn = Date.now();
-    storage.miis.average = avg;
+    avg.private = false;
+    avg.published = true;
+    
+    // Upsert average Mii
+    await Mii.findOneAndUpdate(
+        { id: "average" },
+        { $set: avg },
+        { upsert: true, new: true }
+    );
+    console.log("Average Mii upserted successfully");
 }
 
 // Sitemap generation functions
@@ -686,33 +781,35 @@ site.use(express.urlencoded({ extended: true }));
 site.use(express.static(path.join(__dirname + '/static')));
 site.use(cookieParser());
 site.use('/favicon.ico', express.static('static/favicon.png'));
-site.use((req, res, next) => {
+site.use(async (req, res, next) => {
     // Check if user is banned
-    if (req.cookies.username && storage.users[req.cookies.username]) {
-        const user = storage.users[req.cookies.username];
-        
-        // Check IP ban
-        const clientIP = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
-        const ipHash = hashIP(clientIP);
-        if (storage.bannedIPs.includes(ipHash)) {
-            res.clearCookie('username');
-            res.clearCookie('token');
-            return res.send('Your IP address has been permanently banned.');
-        }
-        
-        // Check user ban
-        if (isBanned(user)) {
-            // Allow access to logout only
-            if (req.path === '/logout') {
-                return next();
+    if (req.cookies.username) {
+        const user = await getUserByUsername(req.cookies.username);
+        if (user) {
+            // Check IP ban
+            const clientIP = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+            const ipHash = hashIP(clientIP);
+            const settings = await getSettings();
+            if (settings.bannedIPs.includes(ipHash)) {
+                res.clearCookie('username');
+                res.clearCookie('token');
+                return res.send('Your IP address has been permanently banned.');
             }
             
-            if (user.role === ROLES.TEMP_BANNED && user.banExpires) {
-                const timeLeft = Math.ceil((user.banExpires - Date.now()) / (1000 * 60 * 60));
-                return res.send(`You are temporarily banned. Time remaining: ${timeLeft} hours. Reason: ${user.banReason || 'No reason provided'}`);
-            }
-            else {
-                return res.send(`You are permanently banned. Reason: ${user.banReason || 'No reason provided'}`);
+            // Check user ban
+            if (await isBanned(user)) {
+                // Allow access to logout only
+                if (req.path === '/logout') {
+                    return next();
+                }
+                
+                if (user.role === ROLES.TEMP_BANNED && user.banExpires) {
+                    const timeLeft = Math.ceil((user.banExpires - Date.now()) / (1000 * 60 * 60));
+                    return res.send(`You are temporarily banned. Time remaining: ${timeLeft} hours. Reason: ${user.banReason || 'No reason provided'}`);
+                }
+                else {
+                    return res.send(`You are permanently banned. Reason: ${user.banReason || 'No reason provided'}`);
+                }
             }
         }
     }
@@ -722,9 +819,9 @@ site.use((req, res, next) => {
 site.use('/privateMiiImgs', async (req, res, next) => {
     const miiId = req.path.split('/').pop().split('.')[0];
     
-    if (storage.privateMiis && storage.privateMiis[miiId]) {
-        const privateMii = storage.privateMiis[miiId];
-        const user = storage.users[req.cookies.username];
+    const privateMii = await Mii.findOne({ id: miiId, private: true }).lean();
+    if (privateMii) {
+        const user = await getUserByUsername(req.cookies.username);
         const isModerator = user && canModerate(user);
         const isOwner = privateMii.uploader === req.cookies.username;
         
@@ -740,9 +837,9 @@ site.use('/privateMiiImgs', async (req, res, next) => {
 site.use('/privateMiiQRs', async (req, res, next) => {
     const miiId = req.path.split('/').pop().split('.')[0];
     
-    if (storage.privateMiis && storage.privateMiis[miiId]) {
-        const privateMii = storage.privateMiis[miiId];
-        const user = storage.users[req.cookies.username];
+    const privateMii = await Mii.findOne({ id: miiId, private: true }).lean();
+    if (privateMii) {
+        const user = await getUserByUsername(req.cookies.username);
         const isModerator = user && canModerate(user);
         const isOwner = privateMii.uploader === req.cookies.username;
         
@@ -793,10 +890,7 @@ site.use((req, res, next) => {
 connectionPromise.then(() => { // TODO: server error page if DB fails
     site.listen(8080, async () => {
         console.log("Starting, do not stop...");
-        
-        // Initialize privateMiis storage if it doesn't exist
-        if (!storage.privateMiis) storage.privateMiis = {};
-        
+
         // Ensure directories exist
         if (!fs.existsSync('./static/privateMiiImgs')) {
             fs.mkdirSync('./static/privateMiiImgs', { recursive: true });
@@ -808,245 +902,65 @@ connectionPromise.then(() => { // TODO: server error page if DB fails
             fs.mkdirSync('./static/temp', { recursive: true });
         }
 
-        // Migrate old flat category structure to nested structure
-        if (storage.officialCategories && !storage.officialCategories.categories) {
-            console.log("Migrating old category structure to nested format...");
-            
-            const oldCategories = storage.officialCategories;
-            const newCategories = { categories: [] };
-            
-            // Convert old structure to new
-            Object.keys(oldCategories).forEach(parentName => {
-                const parent = oldCategories[parentName];
-                const newParent = {
-                    name: parentName,
-                    color: parent.color || "#999999",
-                    path: parentName,
-                    children: []
-                };
-                
-                if (parent.subcategories && Array.isArray(parent.subcategories)) {
-                    parent.subcategories.forEach(subcat => {
-                        newParent.children.push({
-                            name: subcat,
-                            color: parent.color || "#999999",
-                            path: `${parentName}/${subcat}`,
-                            children: []
-                        });
-                    });
-                }
-                
-                newCategories.categories.push(newParent);
-            });
-            
-            storage.officialCategories = newCategories;
-            
-            // Update all official Miis to use paths
-            let miisUpdated = 0;
-            Object.values(storage.miis).forEach(mii => {
-                if (mii.official && mii.officialCategories) {
-                    // Convert old category names to paths
-                    const newCategories = [];
-                    mii.officialCategories.forEach(oldCat => {
-                        // Try to find matching path in new structure
-                        const allCats = getAllCategoriesFlat(storage.officialCategories.categories);
-                        const found = allCats.find(c => c.name === oldCat);
-                        if (found) {
-                            newCategories.push(found.path);
-                        }
-                    });
-                    mii.officialCategories = newCategories;
-                    miisUpdated++;
-                }
-            });
-            
-            // Also update private Miis
-            if (storage.privateMiis) {
-                Object.values(storage.privateMiis).forEach(mii => {
-                    if (mii.official && mii.officialCategories) {
-                        const newCategories = [];
-                        mii.officialCategories.forEach(oldCat => {
-                            const allCats = getAllCategoriesFlat(storage.officialCategories.categories);
-                            const found = allCats.find(c => c.name === oldCat);
-                            if (found) {
-                                newCategories.push(found.path);
-                            }
-                        });
-                        mii.officialCategories = newCategories;
-                        miisUpdated++;
-                    }
-                });
-            }
-            
-            save();
-            console.log(`Migration complete. Updated ${miisUpdated} Miis to use category paths.`);
-        }
+        // Initialize settings if not exists
+        const settings = await getSettings();
+        console.log("Settings initialized");
 
-        console.log("Migration complete - all official Miis have officialCategories arrays");
-
-        // Initialize official categories structure with unlimited nesting
-        if (!storage.officialCategories) {
-            storage.officialCategories = {
-                // Structure: { name: string, color: string, children: [...], path: string }
-                categories: [
-                    {
-                        name: "Games",
-                        color: "#ff6b6b",
-                        path: "Games",
-                        children: [
-                            {
-                                name: "Wii Sports Series",
-                                color: "#ff8787",
-                                path: "Games/Wii Sports Series",
-                                children: [
-                                    { name: "Wii Sports", color: "#ffa3a3", path: "Games/Wii Sports Series/Wii Sports", children: [] },
-                                    { name: "Wii Sports Resort", color: "#ffa3a3", path: "Games/Wii Sports Series/Wii Sports Resort", children: [] },
-                                    { name: "Wii Sports Club", color: "#ffa3a3", path: "Games/Wii Sports Series/Wii Sports Club", children: [] },
-                                    { name: "Nintendo Switch Sports", color: "#ffa3a3", path: "Games/Wii Sports Series/Nintendo Switch Sports", children: [] }
-                                ]
-                            },
-                            {
-                                name: "Wii Play Series",
-                                color: "#ff8787",
-                                path: "Games/Wii Play Series",
-                                children: [
-                                    { name: "Wii Play", color: "#ffa3a3", path: "Games/Wii Play Series/Wii Play", children: [] },
-                                    { name: "Wii Play Motion", color: "#ffa3a3", path: "Games/Wii Play Series/Wii Play Motion", children: [] }
-                                ]
-                            },
-                            {
-                                name: "Wii Fit Series",
-                                color: "#ff8787",
-                                path: "Games/Wii Fit Series",
-                                children: [
-                                    { name: "Wii Fit", color: "#ffa3a3", path: "Games/Wii Fit Series/Wii Fit", children: [] },
-                                    { name: "Wii Fit Plus", color: "#ffa3a3", path: "Games/Wii Fit Series/Wii Fit Plus", children: [] },
-                                    { name: "Wii Fit U", color: "#ffa3a3", path: "Games/Wii Fit Series/Wii Fit U", children: [] }
-                                ]
-                            },
-                            {
-                                name: "Wii Party Series",
-                                color: "#ff8787",
-                                path: "Games/Wii Party Series",
-                                children: [
-                                    { name: "Wii Party", color: "#ffa3a3", path: "Games/Wii Party Series/Wii Party", children: [] },
-                                    { name: "Wii Party U", color: "#ffa3a3", path: "Games/Wii Party Series/Wii Party U", children: [] }
-                                ]
-                            },
-                            {
-                                name: "Mario Kart Series",
-                                color: "#ff8787",
-                                path: "Games/Mario Kart Series",
-                                children: [
-                                    { name: "Mario Kart Wii", color: "#ffa3a3", path: "Games/Mario Kart Series/Mario Kart Wii", children: [] },
-                                    { name: "Mario Kart 7", color: "#ffa3a3", path: "Games/Mario Kart Series/Mario Kart 7", children: [] },
-                                    { name: "Mario Kart 8", color: "#ffa3a3", path: "Games/Mario Kart Series/Mario Kart 8", children: [] }
-                                ]
-                            },
-                            {
-                                name: "Super Smash Bros. Series",
-                                color: "#ff8787",
-                                path: "Games/Super Smash Bros. Series",
-                                children: [
-                                    { name: "Super Smash Bros. for 3DS/Wii U", color: "#ffa3a3", path: "Games/Super Smash Bros. Series/Super Smash Bros. for 3DS/Wii U", children: [] },
-                                    { name: "Super Smash Bros. Ultimate", color: "#ffa3a3", path: "Games/Super Smash Bros. Series/Super Smash Bros. Ultimate", children: [] }
-                                ]
-                            },
-                            {
-                                name: "Tomodachi Series",
-                                color: "#ff8787",
-                                path: "Games/Tomodachi Series",
-                                children: [
-                                    { name: "Tomodachi Collection", color: "#ffa3a3", path: "Games/Tomodachi Series/Tomodachi Collection", children: [] },
-                                    { name: "Tomodachi Life", color: "#ffa3a3", path: "Games/Tomodachi Series/Tomodachi Life", children: [] }
-                                ]
-                            },
-                            { name: "Miitopia", color: "#ff8787", path: "Games/Miitopia", children: [] },
-                            { name: "Wii Music", color: "#ff8787", path: "Games/Wii Music", children: [] },
-                            { name: "Nintendo Land", color: "#ff8787", path: "Games/Nintendo Land", children: [] }
-                        ]
-                    },
-                    {
-                        name: "Consoles",
-                        color: "#4ecdc4",
-                        path: "Consoles",
-                        children: [
-                            { name: "Wii", color: "#6ed9d0", path: "Consoles/Wii", children: [] },
-                            { name: "Nintendo DS", color: "#6ed9d0", path: "Consoles/Nintendo DS", children: [] },
-                            { name: "Nintendo 3DS", color: "#6ed9d0", path: "Consoles/Nintendo 3DS", children: [] },
-                            { name: "Wii U", color: "#6ed9d0", path: "Consoles/Wii U", children: [] },
-                            { name: "Nintendo Switch", color: "#6ed9d0", path: "Consoles/Nintendo Switch", children: [] }
-                        ]
-                    },
-                    {
-                        name: "Other",
-                        color: "#95e1d3",
-                        path: "Other",
-                        children: [
-                            { name: "Promo Material", color: "#ade8dd", path: "Other/Promo Material", children: [] },
-                            { name: "E3 Demos", color: "#ade8dd", path: "Other/E3 Demos", children: [] },
-                            { name: "Internal/Debug", color: "#ade8dd", path: "Other/Internal/Debug", children: [] },
-                            { name: "System Defaults", color: "#ade8dd", path: "Other/System Defaults", children: [] }
-                        ]
-                    }
-                ]
-            };
-        }
-
-        console.log("Official categories initialized with nested structure");
-        
-        // Ensure privateMiis array for all users
-        Object.keys(storage.users).forEach(username => {
-            if (!storage.users[username].privateMiis) {
-                storage.users[username].privateMiis = [];
-            }
-        });
-        
         // For Quickly Uploading Batches of Miis
-        await Promise.all(
-            fs.readdirSync("./quickUploads").map(async (file) => {
-                let mii;
-                switch (file.split(".").pop().toLowerCase()) {
-                    case "mii":
-                        mii = await miijs.convertMii(await miijs.readWiiBin(`./quickUploads/${file}`));
-                    break;
-                    case "png"://Do the same as JPG
-                    case "jpg":
-                        mii = await miijs.read3DSQR(`./quickUploads/${file}`);
-                    break;
-                    case "txt"://Don't go to default handler, but don't do anything
-                    return;
-                    default:
+        if (fs.existsSync('./quickUploads')) {
+            await Promise.all(
+                fs.readdirSync("./quickUploads").map(async (file) => {
+                    let mii;
+                    switch (file.split(".").pop().toLowerCase()) {
+                        case "mii":
+                            mii = await miijs.convertMii(await miijs.readWiiBin(`./quickUploads/${file}`));
+                            break;
+                        case "png"://Do the same as JPG
+                        case "jpg":
+                            mii = await miijs.read3DSQR(`./quickUploads/${file}`);
+                            break;
+                        case "txt"://Don't go to default handler, but don't do anything
+                            return;
+                        default:
+                            fs.unlinkSync(`./quickUploads/${file}`);
+                            return;
+                    }
+
+                    if (!mii) {
+                        console.warn(`Couldn't read ${file}`);
                         fs.unlinkSync(`./quickUploads/${file}`);
-                    return;
-                }
-                
-                if (!mii) {
-                    console.warn(`Couldn't read ${file}`);
+                        return;
+                    }
+
+                    mii.uploadedOn = Date.now();
+                    mii.uploader = fs.readFileSync("./quickUploads/uploader.txt", "utf-8");
+                    mii.official = mii.uploader === "Nintendo";
+                    mii.votes = 1;
+                    mii.id = await genId();
+                    mii.desc = "Uploaded in Bulk";
+                    mii.private = false;
+                    mii.published = true;
+
+                    await Mii.create(mii);
+
+                    // Add to user's submissions
+                    await User.findOneAndUpdate(
+                        { username: mii.uploader },
+                        { $push: { submissions: mii.id } },
+                        { upsert: true }
+                    );
+
                     fs.unlinkSync(`./quickUploads/${file}`);
-                    return;
-                }
-                
-                mii.uploadedOn = Date.now();
-                mii.uploader = fs.readFileSync("./quickUploads/uploader.txt", "utf-8");
-                mii.official = mii.uploader === "Nintendo";
-                mii.votes = 1;
-                mii.id = genId();
-                mii.desc = "Uploaded in Bulk";
-                
-                storage.miis[mii.id] = mii;
-                Object.keys(storage.miis).push(mii.id);
-                (storage.users[mii.uploader] ??= { submissions: [] }).submissions.push(mii.id);
-                
-                fs.unlinkSync(`./quickUploads/${file}`);
-                console.log(`Added ${mii.meta.name} from quick uploads`);
-            })
-        );
-        console.log("Finished Checking Quick Uploads Folder");
-        
+                    console.log(`Added ${mii.meta.name} from quick uploads`);
+                })
+            );
+            console.log("Finished Checking Quick Uploads Folder");
+        }
+
         // For ensuring QRs are readable
+        const qrFiles = fs.readdirSync("./static/miiQRs");
         await Promise.all(
-            fs.readdirSync("./static/miiQRs").map(async (file) => {
+            qrFiles.map(async (file) => {
                 try {
                     if (!fs.existsSync(`./static/miiQRs/${file}`)) return;
                     const mii = await miijs.read3DSQR(`./static/miiQRs/${file}`);
@@ -1060,29 +974,33 @@ connectionPromise.then(() => { // TODO: server error page if DB fails
             })
         );
         console.log("Ensured QRs Are Readable For All Miis");
-        
+
         // Make sure QRs and Thumbnails exist
+        const allMiis = await Mii.find({}).lean();
         await Promise.all(
-            Object.keys(storage.miis).map(async (miiKey) => {
-                const mii = storage.miis[miiKey];
-                
-                if (!fs.existsSync(`./static/miiImgs/${mii.id}.png`)) {
-                    fs.writeFileSync(`./static/miiImgs/${mii.id}.png`, await miijs.renderMii(mii));
+            allMiis.map(async (mii) => {
+                const imgPath = mii.private ? `./static/privateMiiImgs/${mii.id}.png` : `./static/miiImgs/${mii.id}.png`;
+                const qrPath = mii.private ? `./static/privateMiiQRs/${mii.id}.png` : `./static/miiQRs/${mii.id}.png`;
+
+                if (!fs.existsSync(imgPath)) {
+                    fs.writeFileSync(imgPath, await miijs.renderMii(mii));
                     console.log(`Making image for ${mii.id}`);
                 }
-                
-                if (!fs.existsSync(`./static/miiQRs/${mii.id}.png`)) {
-                    miijs.write3DSQR(mii, `./static/miiQRs/${mii.id}.png`);
+
+                if (!fs.existsSync(qrPath)) {
+                    miijs.write3DSQR(mii, qrPath);
                     console.log(`Making QR for ${mii.id}`);
                 }
             })
         );
         console.log(`Ensured All Miis Have QRs And Face Renders\nGenerating new average Mii...`);
-        getAverageMii();
-        setInterval(getAverageMii,1800000);//30 Mins, should be adjusted for actual need - if the site gets big, every time a Mii is made will be too frequent, but 30 mins will be too long. If the site remains small, 30 mins will be far too frequent.
-        fs.writeFileSync(`./static/miiImgs/average.png`, await miijs.renderMii(storage.miis.average));
-        await miijs.write3DSQR(storage.miis.average, `./static/miiQRs/average.png`);
-        save();
+        await getAverageMii();
+        setInterval(async () => await getAverageMii(), 1800000);//30 Mins
+        const avgMii = await getMiiById("average");
+        if (avgMii) {
+            fs.writeFileSync(`./static/miiImgs/average.png`, await miijs.renderMii(avgMii));
+            await miijs.write3DSQR(avgMii, `./static/miiQRs/average.png`);
+        }
         console.log(`All setup finished.\nOnline`);
     });
 });
@@ -1091,11 +1009,11 @@ site.get('/', async (req, res) => {
     let toSend = await getSendables(req, "InfiniMii");
     toSend.title = "InfiniMii";
     toSend.miiCategories={
-        "Random":{miis:api("random",5),link:"./random"},
-        "Top":{miis:api("top",5),link:"./top"},
-        "All Time Top":{miis:api("best",5),link:"./best"},
-        "Recent":{miis:api("recent",5),link:"./recent"},
-        "Official":{miis:api("official",5),link:"./official"}
+        "Random":{miis:await api("random",5),link:"./random"},
+        "Top":{miis:await api("top",5),link:"./top"},
+        "All Time Top":{miis:await api("best",5),link:"./best"},
+        "Recent":{miis:await api("recent",5),link:"./recent"},
+        "Official":{miis:await api("official",5),link:"./official"}
     };
     ejs.renderFile(toSend.thisUser.toLowerCase()==="default"?'./ejsFiles/about.ejs':'./ejsFiles/index.ejs', toSend, {}, function(err, str) {
         if (err) {
@@ -1109,7 +1027,7 @@ site.get('/', async (req, res) => {
 //The following up to and including /recent are all sorted before being renders in miis.ejs, meaning the file is recycled. / is currently just a clone of /top. /official and /search is more of the same but with a slight change to make Highlighted Mii still work without the full Mii array
 site.get('/random', async (req, res) => {
     let toSend = await getSendables(req);
-    toSend.displayedMiis = api("random",30);
+    toSend.displayedMiis = await api("random",30);
     toSend.title = "Random Miis - InfiniMii";
     ejs.renderFile('./ejsFiles/miis.ejs', toSend, {}, function(err, str) {
         if (err) {
@@ -1122,7 +1040,7 @@ site.get('/random', async (req, res) => {
 });
 site.get('/top', async (req, res) => {
     let toSend = await getSendables(req);
-    toSend.displayedMiis = api("top",30);
+    toSend.displayedMiis = await api("top",30);
     toSend.title = "Top Miis - InfiniMii";
     ejs.renderFile('./ejsFiles/miis.ejs', toSend, {}, function(err, str) {
         if (err) {
@@ -1135,7 +1053,7 @@ site.get('/top', async (req, res) => {
 });
 site.get('/best', async (req, res) => {
     let toSend = await getSendables(req);
-    toSend.displayedMiis = api("best",30);
+    toSend.displayedMiis = await api("best",30);
     toSend.title = "All-Time Top Miis - InfiniMii";
     ejs.renderFile('./ejsFiles/miis.ejs', toSend, {}, function(err, str) {
         if (err) {
@@ -1148,7 +1066,7 @@ site.get('/best', async (req, res) => {
 });
 site.get('/recent', async (req, res) => {
     let toSend = await getSendables(req);
-    toSend.displayedMiis = api("recent",30);
+    toSend.displayedMiis = await api("recent",30);
     toSend.title = "Recent Miis - InfiniMii";
     ejs.renderFile('./ejsFiles/miis.ejs', toSend, {}, function(err, str) {
         if (err) {
@@ -1162,11 +1080,15 @@ site.get('/recent', async (req, res) => {
 site.get('/official', async (req, res) => {
     let toSend = await getSendables(req);
     
-    // Get all official Miis
-    let officialMiis = Object.values(storage.miis).filter(mii => mii.official);
+    // Get all official Miis from DB
+    let officialMiis = await Mii.find({ official: true, private: false }).lean();
+    
+    // Get settings for categories
+    const settings = await getSettings();
+    const categories = settings.officialCategories?.categories || [];
     
     // Get all unique leaf categories (only categories that can be assigned to Miis)
-    const leafCategories = getAllLeafCategories(storage.officialCategories.categories);
+    const leafCategories = getAllLeafCategories(categories);
     
     // Create category info with paths for display
     toSend.availableCategories = leafCategories.map(cat => ({
@@ -1207,7 +1129,7 @@ site.get('/official', async (req, res) => {
 });
 site.get('/searchResults', async (req, res) => {
     let toSend = await getSendables(req)
-    toSend.displayedMiis = api("search",30,0,req.query.q);
+    toSend.displayedMiis = await api("search",30,0,req.query.q);
     toSend.title = "Search '" + req.query.q + "' - InfiniMii";
     ejs.renderFile('./ejsFiles/miis.ejs', toSend, {}, function(err, str) {
         if (err) {
@@ -1275,7 +1197,7 @@ site.get('/upload', async (req, res) => {
 });
 site.get('/api', async (req, res) => {
     try{
-        res.send(api(req.query.type,req.query.arg));
+        res.send(await api(req.query.type,req.query.arg));
     }
     catch(e){
         res.send(`{"okay":false,"error":"Invalid arguments"}`);
@@ -1283,11 +1205,26 @@ site.get('/api', async (req, res) => {
 });
 site.get('/verify', async (req, res) => {
     try {
-        if (validatePassword(req.query.token, storage.users[req.query.user].salt, storage.users[req.query.user].verificationToken)) {
-            delete storage.users[req.query.user].verificationToken;
+        const user = await getUserByUsername(req.query.user);
+        if (!user) {
+            res.send("{'error':'User not found'}");
+            return;
+        }
+        
+        if (validatePassword(req.query.token, user.salt, user.verificationToken)) {
             let token = genToken();
-            storage.users[req.query.user].token = hashPassword(token, storage.users[req.query.user].salt).hash;
-            storage.users[req.query.user].verified = true;
+            
+            await User.findOneAndUpdate(
+                { username: req.query.user },
+                { 
+                    $unset: { verificationToken: "" },
+                    $set: { 
+                        token: hashPassword(token, user.salt).hash,
+                        verified: true 
+                    }
+                }
+            );
+            
             await res.cookie("username", req.query.user, { maxAge: 30 * 24 * 60 * 60 * 1000/*1 Month*/ });
             await res.cookie("token", token, { maxAge: 30 * 24 * 60 * 60 * 1000/*1 Month*/ });
             res.redirect("/");
@@ -1296,7 +1233,6 @@ site.get('/verify', async (req, res) => {
             res.send("{'error:'Bad request'}");
             return;
         }
-        save();
     }
     catch (e) {
         res.send("Error");
@@ -1305,160 +1241,107 @@ site.get('/verify', async (req, res) => {
 });
 site.get('/deleteMii', async (req, res) => {
     try {
-        if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+        const user = await getUserByUsername(req.cookies.username);
+        if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
             res.send("{'okay':false}");
             return;
         }
         
-        const user = storage.users[req.cookies.username];
         const isModerator = canModerate(user);
         const miiId = req.query.id;
         
-        // Check if it's a published Mii
-        if (storage.miis[miiId]) {
-            if (user.submissions.includes(miiId) || isModerator) {
-                var mii = storage.miis[miiId];
-                storage.users[mii.uploader].submissions.splice(storage.users[mii.uploader].submissions.indexOf(mii.id), 1);
-                var d = new Date();
-                let miiImageData;
-                try {
-                    miiImageData = fs.readFileSync(`./static/miiImgs/${mii.id}.png`);
-                } catch(e) {
-                    try {
-                        miiImageData = fs.readFileSync(`./static/miiImgs/${mii.id}.png`);
-                    } catch(e2) {
-                        miiImageData = null;
+        // Try to find the Mii (could be public or private)
+        const mii = await getMiiById(miiId, true);
+        
+        if (!mii) {
+            res.send("{'okay':false, 'error':'Mii not found'}");
+            return;
+        }
+        
+        // Check permissions
+        const canDelete = user.submissions.includes(miiId) || 
+                         (user.privateMiis && user.privateMiis.includes(miiId)) || 
+                         isModerator;
+        
+        if (!canDelete) {
+            res.send("{'okay':false}");
+            return;
+        }
+        
+        var d = new Date();
+        const imgPath = mii.private ? `./static/privateMiiImgs/${mii.id}.png` : `./static/miiImgs/${mii.id}.png`;
+        const qrPath = mii.private ? `./static/privateMiiQRs/${mii.id}.png` : `./static/miiQRs/${mii.id}.png`;
+        
+        let miiImageData;
+        try {
+            miiImageData = fs.readFileSync(imgPath);
+        } catch(e) {
+            miiImageData = null;
+        }
+
+        const attachments = miiImageData ? [{
+            data: miiImageData,
+            filename: `${mii.id}.png`,
+            contentType: 'image/png'
+        }] : [];
+
+        makeReport(JSON.stringify({
+            embeds: [{
+                "type": "rich",
+                "title": (mii.official ? "Official " : "") + (mii.private ? "Private " : "Published ") + `Mii Deleted by ` + req.cookies.username,
+                "description": mii.desc,
+                "color": mii.private ? 0xff6600 : 0xff0000,
+                "fields": [
+                    {
+                        "name": `Mii Name`,
+                        "value": mii.name || mii.meta?.name,
+                        "inline": true
+                    },
+                    {
+                        "name": `${mii.official ? "Uploaded" : "Made"} by`,
+                        "value": `[${mii.uploader}](https://infinimii.com/user/${mii.uploader})`,
+                        "inline": true
+                    },
+                    {
+                        "name": `Mii Creator Name (embedded in Mii file)`,
+                        "value": mii.creatorName || mii.meta?.creatorName,
+                        "inline": true
                     }
-                }
-
-                const attachments = miiImageData ? [{
-                    data: miiImageData,
-                    filename: `${mii.id}.png`,
-                    contentType: 'image/png'
-                }] : [];
-
-                makeReport(JSON.stringify({
-                    embeds: [{
-                        "type": "rich",
-                        "title": (mii.official ? "Official " : "") + `Published Mii Deleted by ` + req.cookies.username,
-                        "description": mii.desc,
-                        "color": 0xff0000,
-                        "fields": [
-                            {
-                                "name": `Mii Name`,
-                                "value": mii.name || mii.meta?.name,
-                                "inline": true
-                            },
-                            {
-                                "name": `${mii.official ? "Uploaded" : "Made"} by`,
-                                "value": `[${mii.uploader}](https://infinimii.com/user/${mii.uploader})`,
-                                "inline": true
-                            },
-                            {
-                                "name": `Mii Creator Name (embedded in Mii file)`,
-                                "value": mii.creatorName || mii.meta?.creatorName,
-                                "inline": true
-                            }
-                        ],
-                        ...(miiImageData ? {
-                            "image": {
-                                "url": `attachment://${mii.id}.png`
-                            }
-                        } : {}),
-                        "footer": {
-                            "text": `Deleted at ${d.getHours()}:${d.getMinutes()}, ${d.toDateString()} UTC`
-                        }
-                    }]
-                }), attachments);
-                Object.keys(storage.miis).splice(Object.keys(storage.miis).indexOf(miiId), 1);
-                delete storage.miis[miiId];
-                try { fs.unlinkSync("./static/miiImgs/" + miiId + ".png"); } catch(e) {}
-                try { fs.unlinkSync("./static/miiQRs/" + miiId + ".png"); } catch(e) {}
-                res.send("{'okay':true}");
-                save();
-            }
-            else {
-                res.send("{'okay':false}");
-            }
-        }
-        // Check if it's a private Mii
-        else if (storage.privateMiis && storage.privateMiis[miiId]) {
-            if (user.privateMiis && user.privateMiis.includes(miiId) || isModerator) {
-                var mii = storage.privateMiis[miiId];
-                
-                // Remove from user's private Miis
-                const uploaderUser = storage.users[mii.uploader];
-                if (uploaderUser && uploaderUser.privateMiis) {
-                    const idx = uploaderUser.privateMiis.indexOf(miiId);
-                    if (idx > -1) uploaderUser.privateMiis.splice(idx, 1);
-                }
-                
-                var d = new Date();
-                let miiImageData;
-                try {
-                    miiImageData = fs.readFileSync(`./static/privateMiiImgs/${miiId}.png`);
-                } catch(e) {
-                    try {
-                        miiImageData = fs.readFileSync(`./static/privateMiiImgs/${miiId}.png`);
-                    } catch(e2) {
-                        miiImageData = null;
+                ],
+                ...(miiImageData ? {
+                    "image": {
+                        "url": `attachment://${mii.id}.png`
                     }
+                } : {}),
+                "footer": {
+                    "text": `Deleted at ${d.getHours()}:${d.getMinutes()}, ${d.toDateString()} UTC`
                 }
-
-                const attachments = miiImageData ? [{
-                    data: miiImageData,
-                    filename: `${miiId}.png`,
-                    contentType: 'image/png'
-                }] : [];
-
-                makeReport(JSON.stringify({
-                    embeds: [{
-                        "type": "rich",
-                        "title": `Private Mii Deleted by ` + req.cookies.username,
-                        "description": mii.desc,
-                        "color": 0xff6600,
-                        "fields": [
-                            {
-                                "name": `Mii Name`,
-                                "value": mii.name || mii.meta?.name,
-                                "inline": true
-                            },
-                            {
-                                "name": `Uploaded by`,
-                                "value": `[${mii.uploader}](https://infinimii.com/user/${mii.uploader})`,
-                                "inline": true
-                            }
-                        ],
-                        ...(miiImageData ? {
-                            "image": {
-                                "url": `attachment://${miiId}.png`
-                            }
-                        } : {}),
-                        "footer": {
-                            "text": `Deleted at ${d.getHours()}:${d.getMinutes()}, ${d.toDateString()} UTC`
-                        }
-                    }]
-                }), attachments);
-                
-                delete storage.privateMiis[miiId];
-                try { fs.unlinkSync("./static/privateMiiImgs/" + miiId + ".png"); } catch(e) {}
-                try { fs.unlinkSync("./static/privateMiiImgs/" + miiId + ".png"); } catch(e) {}
-                try { fs.unlinkSync("./static/privateMiiQRs/" + miiId + ".png"); } catch(e) {}
-                try { fs.unlinkSync("./static/privateMiiQRs/" + miiId + ".png"); } catch(e) {}
-                res.send("{'okay':true}");
-                save();
+            }]
+        }), attachments);
+        
+        // Remove from user's submissions/privateMiis
+        await User.findOneAndUpdate(
+            { username: mii.uploader },
+            { 
+                $pull: { 
+                    submissions: miiId,
+                    privateMiis: miiId
+                }
             }
-            else {
-                res.send("{'okay':false}");
-            }
-        }
-        else {
-            res.send("{'okay':false,'error':'Mii not found'}");
-        }
+        );
+        
+        // Delete from database
+        await Mii.findOneAndDelete({ id: miiId });
+        
+        // Delete files
+        try { fs.unlinkSync(imgPath); } catch(e) {}
+        try { fs.unlinkSync(qrPath); } catch(e) {}
+        
+        res.send("{'okay':true}");
     }
     catch (e) {
-        console.log(e);
-        res.send("{'okay':false}");
+        console.error('Delete Mii error:', e);
+        res.send("{'okay':false,'error':'Server error'}");
     }
 });
 // Update Mii Field (Moderator only)
@@ -1469,11 +1352,12 @@ site.post('/updateMiiField', async (req, res) => {
             return res.json({ okay: false, error: 'Not authenticated' });
         }
 
-        if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+        const user = await getUserByUsername(req.cookies.username);
+        if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
             return res.json({ okay: false, error: 'Invalid token' });
         }
 
-        if (!storage.users[req.cookies.username].roles.includes('moderator')) {
+        if (!user.roles.includes('moderator')) {
             return res.json({ okay: false, error: 'Not authorized' });
         }
 
@@ -1483,54 +1367,57 @@ site.post('/updateMiiField', async (req, res) => {
             return res.json({ okay: false, error: 'Missing parameters' });
         }
 
-        const mii = storage.miis[id];
+        const mii = await getMiiById(id);
         if (!mii) {
             return res.json({ okay: false, error: 'Mii not found' });
         }
 
         // Store old value for logging
         let oldValue;
+        let updates = {};
 
         // Update the appropriate field
         switch (field) {
             case 'name':
                 oldValue = mii.meta.name;
-                mii.meta.name = value;
+                updates['meta.name'] = value;
                 break;
             case 'desc':
                 oldValue = mii.desc;
-                mii.desc = value;
+                updates.desc = value;
                 break;
             case 'creatorName':
                 oldValue = mii.meta.creatorName;
-                mii.meta.creatorName = value;
+                updates['meta.creatorName'] = value;
                 break;
             case 'uploader':
                 // Validate new uploader exists
-                if (!storage.users[value]) {
+                const newUploader = await getUserByUsername(value);
+                if (!newUploader) {
                     return res.json({ okay: false, error: 'User does not exist' });
                 }
                 
                 oldValue = mii.uploader;
                 
                 // Remove from old uploader's submissions
-                const oldUploaderSubmissions = storage.users[mii.uploader].submissions;
-                const index = oldUploaderSubmissions.indexOf(id);
-                if (index > -1) {
-                    oldUploaderSubmissions.splice(index, 1);
-                }
+                await User.findOneAndUpdate(
+                    { username: mii.uploader },
+                    { $pull: { submissions: id } }
+                );
                 
                 // Add to new uploader's submissions
-                if (!storage.users[value].submissions.includes(id)) {
-                    storage.users[value].submissions.push(id);
-                }
-                mii.uploader = value;
+                await User.findOneAndUpdate(
+                    { username: value },
+                    { $addToSet: { submissions: id } }
+                );
+                
+                updates.uploader = value;
                 break;
             default:
                 return res.json({ okay: false, error: 'Invalid field' });
         }
 
-        save();
+        await Mii.findOneAndUpdate({ id }, { $set: updates });
 
         // Log to Discord
         makeReport(JSON.stringify({
@@ -1581,16 +1468,17 @@ site.get('/regenerateQR', async (req, res) => {
             return res.json({ okay: false, error: 'Not authenticated' });
         }
 
-        if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+        const user = await getUserByUsername(req.cookies.username);
+        if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
             return res.json({ okay: false, error: 'Invalid token' });
         }
 
-        if (!storage.users[req.cookies.username].roles.includes('moderator')) {
+        if (!user.roles.includes('moderator')) {
             return res.json({ okay: false, error: 'Not authorized' });
         }
 
         const { id } = req.query;
-        const mii = storage.miis[id];
+        const mii = await getMiiById(id);
 
         if (!mii) {
             return res.json({ okay: false, error: 'Mii not found' });
@@ -1632,17 +1520,17 @@ site.post('/addUserRole', async (req, res) => {
             return res.json({ okay: false, error: 'Not authenticated' });
         }
 
-        if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+        const currentUser = await getUserByUsername(req.cookies.username);
+        if (!currentUser || !validatePassword(req.cookies.token, currentUser.salt, currentUser.token)) {
             return res.json({ okay: false, error: 'Invalid token' });
         }
 
-        const currentUser = storage.users[req.cookies.username];
         if (!isAdmin(currentUser)) {
             return res.json({ okay: false, error: 'Only administrators can manage roles' });
         }
 
         const { username, role } = req.body;
-        const targetUser = storage.users[username];
+        const targetUser = await getUserByUsername(username);
 
         if (!targetUser) {
             return res.json({ okay: false, error: 'User not found' });
@@ -1653,7 +1541,7 @@ site.post('/addUserRole', async (req, res) => {
         }
 
         addRole(targetUser, role);
-        save();
+        await User.findOneAndUpdate({ username }, { roles: targetUser.roles });
 
         makeReport(JSON.stringify({
             embeds: [{
@@ -1698,24 +1586,24 @@ site.post('/removeUserRole', async (req, res) => {
             return res.json({ okay: false, error: 'Not authenticated' });
         }
 
-        if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+        const currentUser = await getUserByUsername(req.cookies.username);
+        if (!currentUser || !validatePassword(req.cookies.token, currentUser.salt, currentUser.token)) {
             return res.json({ okay: false, error: 'Invalid token' });
         }
 
-        const currentUser = storage.users[req.cookies.username];
         if (!isAdmin(currentUser)) {
             return res.json({ okay: false, error: 'Only administrators can manage roles' });
         }
 
         const { username, role } = req.body;
-        const targetUser = storage.users[username];
+        const targetUser = await getUserByUsername(username);
 
         if (!targetUser) {
             return res.json({ okay: false, error: 'User not found' });
         }
 
         removeRole(targetUser, role);
-        save();
+        await User.findOneAndUpdate({ username }, { roles: targetUser.roles });
 
         makeReport(JSON.stringify({
             embeds: [{
@@ -1757,17 +1645,17 @@ site.post('/tempBanUser', async (req, res) => {
             return res.json({ okay: false, error: 'Not authenticated' });
         }
 
-        if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+        const currentUser = await getUserByUsername(req.cookies.username);
+        if (!currentUser || !validatePassword(req.cookies.token, currentUser.salt, currentUser.token)) {
             return res.json({ okay: false, error: 'Invalid token' });
         }
 
-        const currentUser = storage.users[req.cookies.username];
         if (!canModerate(currentUser)) {
             return res.json({ okay: false, error: 'Insufficient permissions' });
         }
 
         const { username, hours, reason } = req.body;
-        const targetUser = storage.users[username];
+        const targetUser = await getUserByUsername(username);
 
         if (!targetUser) {
             return res.json({ okay: false, error: 'User not found' });
@@ -1779,10 +1667,18 @@ site.post('/tempBanUser', async (req, res) => {
         }
 
         addRole(targetUser, ROLES.TEMP_BANNED);
-        targetUser.banExpires = Date.now() + (hours * 60 * 60 * 1000);
-        targetUser.banReason = reason;
-
-        save();
+        const banExpires = Date.now() + (hours * 60 * 60 * 1000);
+        
+        await User.findOneAndUpdate(
+            { username },
+            {
+                $set: {
+                    roles: targetUser.roles,
+                    banExpires,
+                    banReason: reason
+                }
+            }
+        );
 
         makeReport(JSON.stringify({
             embeds: [{
@@ -1825,17 +1721,17 @@ site.post('/permBanUser', async (req, res) => {
             return res.json({ okay: false, error: 'Not authenticated' });
         }
 
-        if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+        const currentUser = await getUserByUsername(req.cookies.username);
+        if (!currentUser || !validatePassword(req.cookies.token, currentUser.salt, currentUser.token)) {
             return res.json({ okay: false, error: 'Invalid token' });
         }
 
-        const currentUser = storage.users[req.cookies.username];
         if (!isAdmin(currentUser)) {
             return res.json({ okay: false, error: 'Only administrators can permanently ban users' });
         }
 
         const { username, reason } = req.body;
-        const targetUser = storage.users[username];
+        const targetUser = await getUserByUsername(username);
 
         if (!targetUser) {
             return res.json({ okay: false, error: 'User not found' });
@@ -1846,8 +1742,9 @@ site.post('/permBanUser', async (req, res) => {
         // Ban IP if not VPN
         if (!isVPN(clientIP)) {
             const ipHash = hashIP(clientIP);
-            if (!storage.bannedIPs.includes(ipHash)) {
-                storage.bannedIPs.push(ipHash);
+            const settings = await getSettings();
+            if (!settings.bannedIPs.includes(ipHash)) {
+                await updateSettings({ $addToSet: { bannedIPs: ipHash } });
             }
         }
 
@@ -1855,18 +1752,14 @@ site.post('/permBanUser', async (req, res) => {
         const miiIds = [...targetUser.submissions];
         for (const miiId of miiIds) {
             try {
-                const mii = storage.miis[miiId];
+                const mii = await getMiiById(miiId);
                 if (mii) {
-                    // Remove from miiIds
-                    const index = Object.keys(storage.miis).indexOf(miiId);
-                    if (index > -1) Object.keys(storage.miis).splice(index, 1);
-                    
                     // Delete files
                     try { fs.unlinkSync(`./static/miiImgs/${miiId}.png`); } catch(e) {}
                     try { fs.unlinkSync(`./static/miiQRs/${miiId}.png`); } catch(e) {}
                     
-                    // Delete Mii data
-                    delete storage.miis[miiId];
+                    // Delete Mii from DB
+                    await Mii.findOneAndDelete({ id: miiId });
                 }
             } catch(e) {
                 console.error(`Error deleting Mii ${miiId}:`, e);
@@ -1874,9 +1767,7 @@ site.post('/permBanUser', async (req, res) => {
         }
 
         // Delete user account
-        delete storage.users[username];
-
-        save();
+        await User.findOneAndDelete({ username });
 
         makeReport(JSON.stringify({
             embeds: [{
@@ -1924,17 +1815,17 @@ site.post('/deleteAllUserMiis', async (req, res) => {
             return res.json({ okay: false, error: 'Not authenticated' });
         }
 
-        if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+        const currentUser = await getUserByUsername(req.cookies.username);
+        if (!currentUser || !validatePassword(req.cookies.token, currentUser.salt, currentUser.token)) {
             return res.json({ okay: false, error: 'Invalid token' });
         }
 
-        const currentUser = storage.users[req.cookies.username];
         if (!canModerate(currentUser)) {
             return res.json({ okay: false, error: 'Insufficient permissions' });
         }
 
         const { username } = req.body;
-        const targetUser = storage.users[username];
+        const targetUser = await getUserByUsername(username);
 
         if (!targetUser) {
             return res.json({ okay: false, error: 'User not found' });
@@ -1945,18 +1836,14 @@ site.post('/deleteAllUserMiis', async (req, res) => {
 
         for (const miiId of miiIds) {
             try {
-                const mii = storage.miis[miiId];
+                const mii = await getMiiById(miiId);
                 if (mii) {
-                    // Remove from miiIds
-                    const index = Object.keys(storage.miis).indexOf(miiId);
-                    if (index > -1) Object.keys(storage.miis).splice(index, 1);
-                    
                     // Delete files
                     try { fs.unlinkSync(`./static/miiImgs/${miiId}.png`); } catch(e) {}
                     try { fs.unlinkSync(`./static/miiQRs/${miiId}.png`); } catch(e) {}
                     
-                    // Delete Mii data
-                    delete storage.miis[miiId];
+                    // Delete Mii from DB
+                    await Mii.findOneAndDelete({ id: miiId });
                     deletedCount++;
                 }
             } catch(e) {
@@ -1964,8 +1851,8 @@ site.post('/deleteAllUserMiis', async (req, res) => {
             }
         }
 
-        targetUser.submissions = [];
-        save();
+        // Clear user's submissions array
+        await User.findOneAndUpdate({ username }, { $set: { submissions: [] } });
 
         makeReport(JSON.stringify({
             embeds: [{
@@ -2003,11 +1890,11 @@ site.post('/changeUsername', async (req, res) => {
             return res.json({ okay: false, error: 'Not authenticated' });
         }
 
-        if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+        const currentUser = await getUserByUsername(req.cookies.username);
+        if (!currentUser || !validatePassword(req.cookies.token, currentUser.salt, currentUser.token)) {
             return res.json({ okay: false, error: 'Invalid token' });
         }
 
-        const currentUser = storage.users[req.cookies.username];
         if (!canModerate(currentUser)) {
             return res.json({ okay: false, error: 'Insufficient permissions' });
         }
@@ -2018,27 +1905,27 @@ site.post('/changeUsername', async (req, res) => {
             return res.json({ okay: false, error: 'Invalid username format' });
         }
 
-        if (storage.users[newUsername]) {
+        const existing = await getUserByUsername(newUsername);
+        if (existing) {
             return res.json({ okay: false, error: 'Username already taken' });
         }
 
-        const user = storage.users[oldUsername];
+        const user = await getUserByUsername(oldUsername);
         if (!user) {
             return res.json({ okay: false, error: 'User not found' });
         }
 
-        // Update username in storage
-        storage.users[newUsername] = user;
-        delete storage.users[oldUsername];
+        // Update username in User document
+        await User.findOneAndUpdate(
+            { username: oldUsername },
+            { $set: { username: newUsername } }
+        );
 
         // Update uploader field in all user's Miis
-        user.submissions.forEach(miiId => {
-            if (storage.miis[miiId]) {
-                storage.miis[miiId].uploader = newUsername;
-            }
-        });
-
-        save();
+        await Mii.updateMany(
+            { uploader: oldUsername },
+            { $set: { uploader: newUsername } }
+        );
 
         makeReport(JSON.stringify({
             embeds: [{
@@ -2077,11 +1964,10 @@ site.post('/toggleMiiOfficial', async (req, res) => {
             return res.json({ okay: false, error: 'Not authenticated' });
         }
 
-        if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+        const currentUser = await getUserByUsername(req.cookies.username);
+        if (!currentUser || !validatePassword(req.cookies.token, currentUser.salt, currentUser.token)) {
             return res.json({ okay: false, error: 'Invalid token' });
         }
-
-        const currentUser = storage.users[req.cookies.username];
         if (!canModerate(currentUser)) {
             return res.json({ okay: false, error: 'Not authorized' });
         }
@@ -2092,15 +1978,17 @@ site.post('/toggleMiiOfficial', async (req, res) => {
             return res.json({ okay: false, error: 'Missing parameters' });
         }
 
-        const mii = storage.miis[id];
+        const mii = await getMiiById(id, false);
         if (!mii) {
             return res.json({ okay: false, error: 'Mii not found' });
         }
 
         const oldStatus = mii.official;
-        mii.official = official;
-
-        save();
+        
+        await Mii.findOneAndUpdate(
+            { id },
+            { official }
+        );
 
         // Log to Discord
         makeReport(JSON.stringify({
@@ -2204,8 +2092,8 @@ site.get('/sitemap-miis.xml', async (req, res) => {
     const urls = [];
     
     // Add all published Miis
-    Object.keys(storage.miis).forEach(miiId => {
-        const mii = storage.miis[miiId];
+    const allMiis = await getAllMiis(false);
+    allMiis.forEach(mii => {
         const lastmod = mii.uploadedOn ? new Date(mii.uploadedOn).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
         
         urls.push({
@@ -2236,10 +2124,11 @@ site.get('/sitemap-miis.xml', async (req, res) => {
 site.get('/sitemap-users.xml', async (req, res) => {
     const urls = [];
     
-    Object.keys(storage.users).forEach(username => {
-        if (username !== 'default' && username !== 'Nintendo') {
+    const allUsers = await getAllUsers();
+    allUsers.forEach(user => {
+        if (user.username !== 'default' && user.username !== 'Nintendo') {
             urls.push({
-                loc: `${baseUrl}/user/${encodeURIComponent(username)}`,
+                loc: `${baseUrl}/user/${encodeURIComponent(user.username)}`,
                 changefreq: 'weekly',
                 priority: '0.6'
             });
@@ -2398,25 +2287,27 @@ site.post('/insertMiiIntoAmiibo', upload.fields([
             let mii = null;
             
             // Check published Miis first
-            if (storage.miis[miiId]) {
-                mii = storage.miis[miiId];
-            }
+            mii = await getMiiById(miiId, false);
+            
             // Check private Miis
-            else if (storage.privateMiis && storage.privateMiis[miiId]) {
-                const privateMii = storage.privateMiis[miiId];
-                const user = storage.users[req.cookies.username];
-                const isModerator = user && canModerate(user);
-                const isOwner = privateMii.uploader === req.cookies.username;
+            if (!mii) {
+                const privateMii = await Mii.findOne({ id: miiId, private: true });
+                if (privateMii) {
+                    const user = await getUserByUsername(req.cookies.username);
+                    const isModerator = user && canModerate(user);
+                    const isOwner = privateMii.uploader === req.cookies.username;
                 
-                if (!isOwner && !isModerator) {
-                    res.json({ okay: false, error: 'You do not have permission to use this private Mii' });
-                    try { fs.unlinkSync(req.files.amiibo[0].path); } catch (e) { }
-                    return;
+                    if (!isOwner && !isModerator) {
+                        res.json({ okay: false, error: 'You do not have permission to use this private Mii' });
+                        try { fs.unlinkSync(req.files.amiibo[0].path); } catch (e) { }
+                        return;
+                    }
+                    
+                    mii = privateMii;
                 }
-                
-                mii = privateMii;
             }
-            else {
+            
+            if (!mii) {
                 res.json({ okay: false, error: 'Invalid Mii ID - Mii not found' });
                 try { fs.unlinkSync(req.files.amiibo[0].path); } catch (e) { }
                 return;
@@ -2507,12 +2398,11 @@ site.post('/uploadExtractedAmiibo', async (req, res) => {
         const username = req.cookies.username;
         
         // Check authentication
-        if (!username || !validatePassword(req.cookies.token, storage.users[username].salt, storage.users[username].token)) {
+        const user = await getUserByUsername(username);
+        if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
             res.send("{'error':'Please log in to upload Miis'}");
             return;
         }
-        
-        const user = storage.users[username];
         const tempMiiId = req.body.miiId;
         
         // Check private Mii limit
@@ -2550,13 +2440,17 @@ site.post('/uploadExtractedAmiibo', async (req, res) => {
         mii.blockedFromPublishing = false;
         
         // Add to user's private Miis
-        user.privateMiis.push(newMiiId);
+        await User.findOneAndUpdate(
+            { username },
+            { $push: { privateMiis: newMiiId } }
+        );
         
-        // Store in private miis object
-        if (!storage.privateMiis) storage.privateMiis = {};
-        storage.privateMiis[newMiiId] = mii;
-        
-        save();
+        // Store in database as private Mii
+        await Mii.create({
+            ...mii,
+            _id: newMiiId,
+            private: true
+        });
         
         // Send to Discord for moderator review
         var d = new Date();
@@ -2615,12 +2509,11 @@ site.post('/uploadExtractedAmiibo', async (req, res) => {
 site.post('/uploadStudioMii', async (req, res) => {
     try {
         let uploader = req.cookies.username;
-        if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+        const user = await getUserByUsername(uploader);
+        if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
             res.send("{'okay':false, 'error':'Invalid credentials'}");
             return;
         }
-        
-        const user = storage.users[uploader];
         
         // Check private Mii limit
         if (!user.privateMiis) user.privateMiis = [];
@@ -2680,13 +2573,17 @@ site.post('/uploadStudioMii', async (req, res) => {
         await miijs.write3DSQR(mii, "./static/privateMiiQRs/" + mii.id + ".png");
         
         // Add to user's private Miis
-        user.privateMiis.push(mii.id);
+        await User.findOneAndUpdate(
+            { username: uploader },
+            { $push: { privateMiis: mii.id } }
+        );
         
-        // Store in a separate private miis object
-        if (!storage.privateMiis) storage.privateMiis = {};
-        storage.privateMiis[mii.id] = mii;
-        
-        save();
+        // Store in database as private Mii
+        await Mii.create({
+            ...mii,
+            _id: mii.id,
+            private: true
+        });
         
         // Send to Discord for moderator review
         var d = new Date();
@@ -2744,12 +2641,11 @@ site.get('/downloadMii', async (req, res) => {
         const miiId = req.query.id;
         const format = req.query.format;
         
-        if (!storage.miis[miiId]) {
+        const mii = await getMiiById(miiId, false);
+        if (!mii) {
             res.send("{'error':'Invalid Mii ID'}");
             return;
         }
-        
-        const mii = storage.miis[miiId];
         const miiName = mii.meta.name.replace(/[^a-z0-9]/gi, '_');
         
         if (format === 'qr' || format === '3dsqr') {
@@ -2823,12 +2719,11 @@ site.get('/getStudioCode', async (req, res) => {
     try {
         const miiId = req.query.id;
         
-        if (!storage.miis[miiId]) {
+        const mii = await getMiiById(miiId, false);
+        if (!mii) {
             res.json({ okay: false, error: 'Invalid Mii ID' });
             return;
         }
-        
-        const mii = storage.miis[miiId];
         const studioCode = miijs.convertMiiToStudio(mii);
         
         res.json({ 
@@ -2850,28 +2745,31 @@ site.post('/changeUserPfp', async (req, res) => {
             return res.json({ okay: false, error: 'Not authenticated' });
         }
 
-        if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+        const currentUser = await getUserByUsername(req.cookies.username);
+        if (!currentUser || !validatePassword(req.cookies.token, currentUser.salt, currentUser.token)) {
             return res.json({ okay: false, error: 'Invalid token' });
         }
 
-        const currentUser = storage.users[req.cookies.username];
         if (!canModerate(currentUser)) {
             return res.json({ okay: false, error: 'Insufficient permissions' });
         }
 
         const { username, miiId } = req.body;
-        const targetUser = storage.users[username];
+        const targetUser = await getUserByUsername(username);
 
         if (!targetUser) {
             return res.json({ okay: false, error: 'User not found' });
         }
 
-        if (!storage.miis[miiId]) {
+        const mii = await getMiiById(miiId, false);
+        if (!mii) {
             return res.json({ okay: false, error: 'Mii not found' });
         }
 
-        targetUser.miiPfp = miiId;
-        save();
+        await User.findOneAndUpdate(
+            { username },
+            { miiPfp: miiId }
+        );
 
         makeReport(JSON.stringify({
             embeds: [{
@@ -2909,60 +2807,72 @@ site.get('/voteMii', async (req, res) => {
         return;
     }
     try {
-        if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+        const user = await getUserByUsername(req.cookies.username);
+        if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
             res.send("{'error':'Invalid token'}");
             return;
         }
-        if (storage.users[req.cookies.username].submissions.includes(req.query.id)) {
+        if (user.submissions.includes(req.query.id)) {
             res.send("{'error':'You submitted this Mii'}");
             return;
         }
-        if (storage.users[req.cookies.username].votedFor.includes(req.query.id)) {
-            storage.users[req.cookies.username].votedFor.splice(storage.users[req.cookies.username].votedFor.indexOf(req.query.id), 1);
-            storage.miis[req.query.id].votes--;
+        if (user.votedFor.includes(req.query.id)) {
+            // Unlike
+            await User.findOneAndUpdate(
+                { username: req.cookies.username },
+                { $pull: { votedFor: req.query.id } }
+            );
+            await Mii.findOneAndUpdate(
+                { id: req.query.id },
+                { $inc: { votes: -1 } }
+            );
             res.send("Unliked");
-            save();
             return;
         }
-        storage.users[req.cookies.username].votedFor.push(req.query.id);
-        storage.miis[req.query.id].votes++;
+        // Like
+        await User.findOneAndUpdate(
+            { username: req.cookies.username },
+            { $addToSet: { votedFor: req.query.id } }
+        );
+        await Mii.findOneAndUpdate(
+            { id: req.query.id },
+            { $inc: { votes: 1 } }
+        );
         res.send("Liked");
     }
     catch (e) {
         res.send("{'error':`" + e + "`}");
         return;
     }
-    save();
 });
 site.get('/mii/:id', async (req, res) => {
     let inp = await getSendables(req);
     const miiId = req.params.id;
     
-    // Check if it's a published Mii
-    if (storage.miis[miiId]) {
-        inp.mii = storage.miis[miiId];
-        inp.isPrivate = false;
+    // Try to get Mii (public or private)
+    const mii = await getMiiById(miiId, true);
+    
+    if (!mii) {
+        res.status(404).send("Mii not found");
+        return;
     }
-    // Check if it's a private Mii
-    else if (storage.privateMiis && storage.privateMiis[miiId]) {
-        const privateMii = storage.privateMiis[miiId];
-        const user = storage.users[req.cookies.username];
+    
+    // Check access for private Miis
+    if (mii.private) {
+        const user = await getUserByUsername(req.cookies.username);
         const isModerator = user && canModerate(user);
-        const isOwner = privateMii.uploader === req.cookies.username;
+        const isOwner = mii.uploader === req.cookies.username;
         
-        // Only allow owner or moderator to view
         if (!isOwner && !isModerator) {
             res.status(403).send("Access denied. This is a private Mii.");
             return;
         }
-        
-        inp.mii = privateMii;
         inp.isPrivate = true;
+    } else {
+        inp.isPrivate = false;
     }
-    else {
-        res.status(404).send("Mii not found");
-        return;
-    }
+    
+    inp.mii = mii;
     inp.height=miijs.miiHeightToFeetInches(inp.mii.general.height);
     inp.weight=miijs.miiWeightToRealWeight(inp.mii.general.height,inp.mii.general.weight);
     ejs.renderFile('./ejsFiles/miiPage.ejs', inp, {}, function(err, str) {
@@ -2976,7 +2886,9 @@ site.get('/mii/:id', async (req, res) => {
 });
 site.get('/user/:username', async (req, res) => {
     const username = decodeURIComponent(req.params.username);
-    if (!storage.users[username]) {
+    const user = await getUserByUsername(username);
+    
+    if (!user) {
         return res.status(404).send('User not found');
     }
     if (username === "Nintendo") {
@@ -2984,12 +2896,14 @@ site.get('/user/:username', async (req, res) => {
         return;
     }
     let inp = await getSendables(req);
-    inp.user = storage.users[username];
+    inp.user = user;
     inp.user.name = username;
     inp.displayedMiis = [];
-    storage.users[username].submissions.forEach(mii => {
-        inp.displayedMiis.push(storage.miis[mii]);
-    });
+    
+    // Get all user's submissions
+    const miis = await Mii.find({ id: { $in: user.submissions }, private: false }).lean();
+    inp.displayedMiis = miis;
+    
     ejs.renderFile('./ejsFiles/userPage.ejs', inp, {}, function(err, str) {
         if (err) {
             res.send(err);
@@ -3047,9 +2961,14 @@ site.get('/login', async (req, res) => {
 });
 site.get('/logout', async (req, res) => {
     try {
-        if (validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+        const user = await getUserByUsername(req.cookies.username);
+        if (user && validatePassword(req.cookies.token, user.salt, user.token)) {
+            await User.findOneAndUpdate(
+                { username: req.cookies.username },
+                { token: "" }
+            );
+        } else {
             res.send("{'error':'Invalid token'}");
-            storage.users[req.cookies.username].token = "";
             return;
         }
         await res.clearCookie('username');
@@ -3059,7 +2978,6 @@ site.get('/logout', async (req, res) => {
     catch (e) {
         console.log(e);
     }
-    save();
 });
 site.get('/convert', async (req, res) => {
     ejs.renderFile('./ejsFiles/convert.ejs', await getSendables(req), {}, function(err, str) {
@@ -3102,18 +3020,18 @@ site.get('/myPrivateMiis', async (req, res) => {
         return;
     }
     
-    if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+    const user = await getUserByUsername(req.cookies.username);
+    if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
         res.redirect("/");
         return;
     }
     
     var toSend = await getSendables(req);
-    const user = storage.users[req.cookies.username];
     
-    if (!user.privateMiis) user.privateMiis = [];
-    if (!storage.privateMiis) storage.privateMiis = {};
+    const privateMiisArray = user.privateMiis || [];
+    const privateMiis = await Mii.find({ id: { $in: privateMiisArray }, private: true }).lean();
     
-    toSend.privateMiis = user.privateMiis.map(id => storage.privateMiis[id]).filter(m => m);
+    toSend.privateMiis = privateMiis;
     toSend.privateLimit = PRIVATE_MII_LIMIT;
     
     ejs.renderFile('./ejsFiles/myPrivateMiis.ejs', toSend, {}, function(err, str) {
@@ -3131,19 +3049,20 @@ site.get('/manageCategories', async (req, res) => {
         return;
     }
     
-    if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+    const user = await getUserByUsername(req.cookies.username);
+    if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
         res.redirect("/");
         return;
     }
     
-    const user = storage.users[req.cookies.username];
     if (!canEditOfficial(user)) {
         res.status(403).send("Access denied. Researcher role required.");
         return;
     }
     
     var toSend = await getSendables(req);
-    toSend.officialCategories = storage.officialCategories || {};
+    const settings = await getSettings();
+    toSend.officialCategories = settings.officialCategories || {};
     
     ejs.renderFile('./ejsFiles/manageCategories.ejs', toSend, {}, function(err, str) {
         if (err) {
@@ -3155,50 +3074,72 @@ site.get('/manageCategories', async (req, res) => {
     });
 });
 site.get('/changePfp', async (req, res) => {
-    if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+    const user = await getUserByUsername(req.cookies.username);
+    if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
         res.send(`{"okay":false,"msg":"Invalid account"}`);
         return;
     }
-    if (req.query.id?.length > 0 && Object.keys(storage.miis).includes(req.query.id)) {
-        storage.users[req.cookies.username].miiPfp = req.query.id;
-        res.send(`{"okay":true}`);
-        save();
+    if (req.query.id?.length > 0) {
+        const mii = await getMiiById(req.query.id);
+        if (mii) {
+            await User.findOneAndUpdate(
+                { username: req.cookies.username },
+                { $set: { miiPfp: req.query.id } }
+            );
+            res.send(`{"okay":true}`);
+        } else {
+            res.send(`{"okay":false,"msg":"Invalid Mii ID"}`);
+        }
     }
     else {
         res.send(`{"okay":false,"msg":"Invalid Mii ID"}`);
     }
 });
 site.get('/changeUser', async (req, res) => {
-    if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+    const oldUsername = req.cookies.username;
+    const user = await getUserByUsername(oldUsername);
+    
+    if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
         res.send(`{"okay":false,"msg":"Invalid account"}`);
         return;
     }
-    if (validate(req.query.newUser) && !storage.users[req.query.newUser]) {
-        storage.users[req.query.newUser] = objCopy(storage.users[req.cookies.username]);
-        storage.users[req.cookies.username].submissions.forEach(mii => {
-            try { storage.miis[mii].uploader = req.query.newUser; } catch (e) { }
-        });
-        delete storage.users[req.cookies.username];
+    
+    const newUsername = req.query.newUser;
+    const existingUser = await getUserByUsername(newUsername);
+    
+    if (validate(newUsername) && !existingUser) {
+        // Update all Miis uploaded by this user
+        await Mii.updateMany(
+            { uploader: oldUsername },
+            { uploader: newUsername }
+        );
+        
+        // Update username
+        await User.findOneAndUpdate(
+            { username: oldUsername },
+            { username: newUsername }
+        );
+        
         var d = new Date();
+        const updatedUser = await getUserByUsername(newUsername);
         makeReport(JSON.stringify({
             embeds: [{
                 "type": "rich",
                 "title": `Username Changed`,
-                "description": `${req.cookies.username} is now ${req.query.newUser}`,
+                "description": `${oldUsername} is now ${newUsername}`,
                 "color": 0xff0000,
                 "thumbnail": {
-                    "url": `https://infinimii.com/miiImgs/${storage.users[req.query.newUser].miiPfp}.png`,
+                    "url": `https://infinimii.com/miiImgs/${updatedUser?.miiPfp || '00000'}.png`,
                     "height": 0,
                     "width": 0
                 },
                 "footer": {
                     "text": `Changed at ${d.getHours()}:${d.getMinutes()}, ${d.toDateString()} UTC`
                 },
-                "url": `https://infinimii.com/user/${req.query.newUser}`
+                "url": `https://infinimii.com/user/${newUsername}`
             }]
         }));
-        save();
-        res.cookie('username', req.query.newUser, { maxAge: 30 * 24 * 60 * 60 * 1000/*1 Month*/ });
+        res.cookie('username', newUsername, { maxAge: 30 * 24 * 60 * 60 * 1000/*1 Month*/ });
         res.send(`{"okay":true}`);
     }
     else {
@@ -3206,15 +3147,27 @@ site.get('/changeUser', async (req, res) => {
     }
 });
 site.get('/changeHighlightedMii', async (req, res) => {
-    if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token) || !storage.users[req.cookies.username].roles.includes('moderator')) {
+    const user = await getUserByUsername(req.cookies.username);
+    if (!user || !validatePassword(req.cookies.token, user.salt, user.token) || !user.roles.includes('moderator')) {
         res.send(`{"okay":false,"msg":"Invalid account"}`);
         return;
     }
-    if (req.query.id?.length > 0 && Object.keys(storage.miis).includes(req.query.id)) {
-        storage.highlightedMii = req.query.id;
+    
+    const miiId = req.query.id;
+    if (miiId?.length > 0) {
+        const mii = await getMiiById(miiId, false);
+        if (!mii) {
+            res.send(`{"okay":false,"msg":"Invalid Mii ID"}`);
+            return;
+        }
+        
+        const currentDate = new Date();
+        await updateSettings({
+            highlightedMii: miiId,
+            highlightedMiiChangeDay: currentDate.getDate()
+        });
+        
         res.send(`{"okay":true}`);
-        var mii = storage.miis[storage.highlightedMii];
-        storage.highlightedMiiChangeDay = new Date().getDate();
         let miiImageData;
         try {
             miiImageData = fs.readFileSync(`./static/miiImgs/${mii.id}.png`);
@@ -3266,14 +3219,13 @@ site.get('/changeHighlightedMii', async (req, res) => {
                 "url": `https://infinimii.com/mii/` + mii.id
             }]
         }), attachments);
-        save();
     }
     else {
         res.send(`{"okay":false,"msg":"Invalid Mii ID"}`);
     }
 });
-site.get('/reportMii',(req,res)=>{
-    var mii=storage.miis[req.query.id];
+site.get('/reportMii', async (req,res)=>{
+    const mii = await getMiiById(req.query.id, false);
     makeReport(JSON.stringify({
         embeds: [{
             "type": "rich",
@@ -3316,7 +3268,8 @@ site.get('/reportMii',(req,res)=>{
     res.send(`{"okay":true}`);
 });
 site.get('/miiWii',async (req,res)=>{
-    const mii=await miijs.convertMii(storage.miis[req.query.id]);
+    const fetchedMii = await getMiiById(req.query.id, false);
+    const mii=await miijs.convertMii(fetchedMii);
     console.log(mii.meta.name);
     var miiBuffer=await miijs.writeWiiBin(mii);
     console.log(miiBuffer);
@@ -3352,12 +3305,12 @@ site.post('/changeEmail', async (req, res) => {
             return res.json({ okay: false, msg: 'Not authenticated' });
         }
 
-        if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+        const user = await getUserByUsername(req.cookies.username);
+        if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
             return res.json({ okay: false, msg: 'Invalid token' });
         }
 
         const { oldEmail, newEmail } = req.body;
-        const user = storage.users[req.cookies.username];
 
         // Verify old email matches
         if (user.email !== oldEmail) {
@@ -3369,12 +3322,19 @@ site.post('/changeEmail', async (req, res) => {
             return res.json({ okay: false, msg: 'Invalid email format' });
         }
 
-        user.email = newEmail;
-        user.verified=false;
         var token = genToken();
-        let link = "https://infinimii.com/verify?user=" + encodeURIComponent(req.body.username) + "&token=" + encodeURIComponent(token);
-        user.verificationToken=hashPassword(token, hashed.salt).hash;
-        save();
+        let link = "https://infinimii.com/verify?user=" + encodeURIComponent(req.cookies.username) + "&token=" + encodeURIComponent(token);
+        
+        await User.findOneAndUpdate(
+            { username: req.cookies.username },
+            { 
+                $set: { 
+                    email: newEmail,
+                    verified: false,
+                    verificationToken: hashPassword(token, user.salt).hash
+                }
+            }
+        ); // TODO_DB: this would brick your account if you send to a false email...
 
         makeReport(JSON.stringify({
             embeds: [{
@@ -3410,12 +3370,12 @@ site.post('/changePassword', async (req, res) => {
             return res.json({ okay: false, msg: 'Not authenticated' });
         }
 
-        if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+        const user = await getUserByUsername(req.cookies.username);
+        if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
             return res.json({ okay: false, msg: 'Invalid token' });
         }
 
         const { oldPassword, newPassword } = req.body;
-        const user = storage.users[req.cookies.username];
 
         // Verify old password
         if (!validatePassword(oldPassword, user.salt, user.pass)) {
@@ -3424,13 +3384,18 @@ site.post('/changePassword', async (req, res) => {
 
         // Hash new password with existing salt
         const newHashed = hashPassword(newPassword, user.salt);
-        user.pass = newHashed.hash;
 
         // Generate new token and update cookie
         const newToken = genToken();
-        user.token = hashPassword(newToken, user.salt).hash;
+        const newTokenHash = hashPassword(newToken, user.salt).hash;
 
-        save();
+        await User.findOneAndUpdate(
+            { username: req.cookies.username },
+            { 
+                pass: newHashed.hash,
+                token: newTokenHash
+            }
+        );
 
         // Set new token cookie
         res.cookie("token", newToken, { maxAge: 30 * 24 * 60 * 60 * 1000 });
@@ -3460,34 +3425,30 @@ site.post('/changePassword', async (req, res) => {
 });
 
 // Delete All User's Miis (User - own miis only)
-site.post('/deleteAllMyMiis', async (req, res) => {
+site.post('/deleteAllMyMiis', async (req, res) => { // TODO: verify no CSRF
     try {
         if (!req.cookies.username || !req.cookies.token) {
             return res.json({ okay: false, msg: 'Not authenticated' });
         }
 
-        if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+        const user = await getUserByUsername(req.cookies.username);
+        if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
             return res.json({ okay: false, msg: 'Invalid token' });
         }
 
-        const user = storage.users[req.cookies.username];
         const miiIds = [...user.submissions];
         let deletedCount = 0;
 
         for (const miiId of miiIds) {
             try {
-                const mii = storage.miis[miiId];
+                const mii = await getMiiById(miiId, false);
                 if (mii) {
-                    // Remove from miiIds
-                    const index = Object.keys(storage.miis).indexOf(miiId);
-                    if (index > -1) Object.keys(storage.miis).splice(index, 1);
-                    
                     // Delete files
                     try { fs.unlinkSync(`./static/miiImgs/${miiId}.png`); } catch(e) {}
                     try { fs.unlinkSync(`./static/miiQRs/${miiId}.png`); } catch(e) {}
                     
-                    // Delete Mii data
-                    delete storage.miis[miiId];
+                    // Delete Mii from database
+                    await Mii.deleteOne({ id: miiId });
                     deletedCount++;
                 }
             } catch(e) {
@@ -3495,8 +3456,10 @@ site.post('/deleteAllMyMiis', async (req, res) => {
             }
         }
 
-        user.submissions = [];
-        save();
+        await User.findOneAndUpdate(
+            { username: req.cookies.username },
+            { submissions: [] }
+        );
 
         makeReport(JSON.stringify({
             embeds: [{
@@ -3533,13 +3496,13 @@ site.post('/deleteAccount', async (req, res) => {
             return res.json({ okay: false, msg: 'Not authenticated' });
         }
 
-        if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+        const username = req.cookies.username;
+        const user = await getUserByUsername(username);
+        if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
             return res.json({ okay: false, msg: 'Invalid token' });
         }
 
         const { password } = req.body;
-        const username = req.cookies.username;
-        const user = storage.users[username];
 
         // Verify password
         if (!validatePassword(password, user.salt, user.pass)) {
@@ -3547,8 +3510,10 @@ site.post('/deleteAccount', async (req, res) => {
         }
 
         // Transfer Miis to a special "Deleted User" account
-        if (!storage.users["[Deleted User]"]) {
-            storage.users["[Deleted User]"] = {
+        let deletedUser = await getUserByUsername("[Deleted User]");
+        if (!deletedUser) {
+            await User.create({
+                username: "[Deleted User]",
                 salt: "",
                 pass: "",
                 creationDate: Date.now(),
@@ -3558,21 +3523,22 @@ site.post('/deleteAccount', async (req, res) => {
                 miiPfp: "00000",
                 roles: [ROLES.BASIC],
                 moderator: false
-            };
+            });
         }
 
         // Transfer all Miis to deleted user account
-        user.submissions.forEach(miiId => {
-            if (storage.miis[miiId]) {
-                storage.miis[miiId].uploader = "[Deleted User]";
-                storage.users["[Deleted User]"].submissions.push(miiId);
-            }
-        });
+        await Mii.updateMany(
+            { uploader: username },
+            { uploader: "[Deleted User]" }
+        );
+        
+        await User.findOneAndUpdate(
+            { username: "[Deleted User]" },
+            { $push: { submissions: { $each: user.submissions } } }
+        );
 
         // Delete user account
-        delete storage.users[username];
-
-        save();
+        await User.deleteOne({ username });
 
         // Clear cookies
         res.clearCookie('username');
@@ -3612,12 +3578,11 @@ site.get('/getInstructions', async (req, res) => {
         const format = req.query.format || '3ds'; // '3ds' or 'wii'
         const full = req.query.full === 'true';
         
-        if (!storage.miis[miiId]) {
+        let mii = await getMiiById(miiId, false);
+        if (!mii) {
             res.json({ okay: false, error: 'Invalid Mii ID' });
             return;
         }
-        
-        let mii = storage.miis[miiId];
         
         // Convert to Wii format if requested
         if (format === 'wii') {
@@ -3643,12 +3608,12 @@ site.get('/getInstructions', async (req, res) => {
 site.post('/uploadMii', upload.single('mii'), async (req, res) => {
     try {
         let uploader = req.cookies.username;
-        if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+        const user = await getUserByUsername(uploader);
+        if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
             res.send("{'okay':false,'error':'Invalid authentication'}");
             try { fs.unlinkSync("./uploads/" + req.file.filename); } catch (e) { }
             return;
         }
-        const user = storage.users[uploader];
         
         // Check private Mii limit
         if (!user.privateMiis) user.privateMiis = [];
@@ -3746,13 +3711,17 @@ site.post('/uploadMii', upload.single('mii'), async (req, res) => {
         await miijs.write3DSQR(mii, "./static/privateMiiQRs/" + mii.id + ".png");
         
         // Add to user's private Miis
-        user.privateMiis.push(mii.id);
+        await User.findOneAndUpdate(
+            { username: uploader },
+            { $push: { privateMiis: mii.id } }
+        );
         
-        // Store in a separate private miis object
-        if (!storage.privateMiis) storage.privateMiis = {};
-        storage.privateMiis[mii.id] = mii;
-        
-        save();
+        // Store in database as private Mii
+        await Mii.create({
+            ...mii,
+            _id: mii.id,
+            private: true
+        });
         
         // Send to Discord for moderator review
         var d = new Date();
@@ -3808,11 +3777,11 @@ site.post('/updateOfficialCategories', async (req, res) => {
             return res.json({ okay: false, error: 'Not authenticated' });
         }
 
-        if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+        const currentUser = await getUserByUsername(req.cookies.username);
+        if (!currentUser || !validatePassword(req.cookies.token, currentUser.salt, currentUser.token)) {
             return res.json({ okay: false, error: 'Invalid token' });
         }
 
-        const currentUser = storage.users[req.cookies.username];
         if (!canEditOfficial(currentUser)) {
             return res.json({ okay: false, error: 'Insufficient permissions - Researcher role required' });
         }
@@ -3823,7 +3792,7 @@ site.post('/updateOfficialCategories', async (req, res) => {
             return res.json({ okay: false, error: 'Missing parameters' });
         }
 
-        const mii = storage.miis[miiId];
+        const mii = await getMiiById(miiId, false);
         if (!mii) {
             return res.json({ okay: false, error: 'Mii not found' });
         }
@@ -3833,9 +3802,12 @@ site.post('/updateOfficialCategories', async (req, res) => {
         }
 
         const oldCategories = mii.officialCategories || [];
-        mii.officialCategories = [...new Set(categories.filter(c => c && c.trim()))];
-
-        save();
+        const newCategories = [...new Set(categories.filter(c => c && c.trim()))];
+        
+        await Mii.findOneAndUpdate(
+            { id: miiId },
+            { officialCategories: newCategories }
+        );
 
         makeReport(JSON.stringify({
             embeds: [{
@@ -3856,7 +3828,7 @@ site.post('/updateOfficialCategories', async (req, res) => {
                     },
                     {
                         name: 'New Categories',
-                        value: mii.officialCategories.length ? mii.officialCategories.join(', ') : 'None',
+                        value: newCategories.length ? newCategories.join(', ') : 'None',
                         inline: false
                     }
                 ]
@@ -3872,10 +3844,8 @@ site.post('/updateOfficialCategories', async (req, res) => {
 // Get all official categories (nested structure)
 site.get('/getOfficialCategories', async (req, res) => {
     try {
-        if (!storage.officialCategories) {
-            storage.officialCategories = { categories: [] };
-        }
-        res.json({ okay: true, categories: storage.officialCategories.categories });
+        const settings = await getSettings();
+        res.json({ okay: true, categories: settings.officialCategories.categories });
     } catch (e) {
         console.error('Error getting categories:', e);
         res.json({ okay: false, error: 'Server error' });
@@ -3889,11 +3859,11 @@ site.post('/addCategory', async (req, res) => {
             return res.json({ okay: false, error: 'Not authenticated' });
         }
 
-        if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+        const currentUser = await getUserByUsername(req.cookies.username);
+        if (!currentUser || !validatePassword(req.cookies.token, currentUser.salt, currentUser.token)) {
             return res.json({ okay: false, error: 'Invalid token' });
         }
 
-        const currentUser = storage.users[req.cookies.username];
         if (!canEditOfficial(currentUser)) {
             return res.json({ okay: false, error: 'Insufficient permissions' });
         }
@@ -3906,13 +3876,14 @@ site.post('/addCategory', async (req, res) => {
 
         const categoryName = name.trim();
         
+        const settings = await getSettings();
         // Determine where to add the category
         let targetArray;
         let newPath;
         
         if (!parentPath) {
             // Add as root category
-            targetArray = storage.officialCategories.categories;
+            targetArray = settings.officialCategories.categories;
             newPath = categoryName;
             
             // Check if already exists at root
@@ -3944,7 +3915,7 @@ site.post('/addCategory', async (req, res) => {
         
         targetArray.push(newCategory);
 
-        save();
+        await updateSettings({ officialCategories: settings.officialCategories });
 
         makeReport(JSON.stringify({
             embeds: [{
@@ -3972,7 +3943,7 @@ site.post('/addCategory', async (req, res) => {
             }]
         }));
 
-        res.json({ okay: true, categories: storage.officialCategories.categories });
+        res.json({ okay: true, categories: settings.officialCategories.categories });
     } catch (e) {
         console.error('Error adding category:', e);
         res.json({ okay: false, error: 'Server error' });
@@ -3986,11 +3957,11 @@ site.post('/renameCategory', async (req, res) => {
             return res.json({ okay: false, error: 'Not authenticated' });
         }
 
-        if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+        const currentUser = await getUserByUsername(req.cookies.username);
+        if (!currentUser || !validatePassword(req.cookies.token, currentUser.salt, currentUser.token)) {
             return res.json({ okay: false, error: 'Invalid token' });
         }
 
-        const currentUser = storage.users[req.cookies.username];
         if (!canEditOfficial(currentUser)) {
             return res.json({ okay: false, error: 'Insufficient permissions' });
         }
@@ -4011,8 +3982,9 @@ site.post('/renameCategory', async (req, res) => {
         const oldPath = category.path;
 
         // Check if sibling with same name exists
+        const settings = await getSettings();
         const parent = findParentByChildPath(path);
-        const siblings = parent ? parent.children : storage.officialCategories.categories;
+        const siblings = parent ? parent.children : settings.officialCategories.categories;
         if (siblings.find(c => c.name === newNameTrimmed && c.path !== path)) {
             return res.json({ okay: false, error: 'A category with this name already exists at this level' });
         }
@@ -4033,11 +4005,11 @@ site.post('/renameCategory', async (req, res) => {
         // Update all Miis that use any of these paths
         let totalUpdated = 0;
         for (let i = 0; i < pathsToUpdate.length; i++) {
-            const updated = renameCategoryInAllMiis(pathsToUpdate[i], newPaths[i]);
+            const updated = await renameCategoryInAllMiis(pathsToUpdate[i], newPaths[i]);
             totalUpdated += updated;
         }
 
-        save();
+        await updateSettings({ officialCategories: settings.officialCategories });
 
         makeReport(JSON.stringify({
             embeds: [{
@@ -4075,7 +4047,7 @@ site.post('/renameCategory', async (req, res) => {
             }]
         }));
 
-        res.json({ okay: true, categories: storage.officialCategories.categories, updatedMiis: totalUpdated });
+        res.json({ okay: true, categories: settings.officialCategories.categories, updatedMiis: totalUpdated });
     } catch (e) {
         console.error('Error renaming category:', e);
         res.json({ okay: false, error: 'Server error' });
@@ -4089,11 +4061,11 @@ site.post('/deleteCategory', async (req, res) => {
             return res.json({ okay: false, error: 'Not authenticated' });
         }
 
-        if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+        const currentUser = await getUserByUsername(req.cookies.username);
+        if (!currentUser || !validatePassword(req.cookies.token, currentUser.salt, currentUser.token)) {
             return res.json({ okay: false, error: 'Invalid token' });
         }
 
-        const currentUser = storage.users[req.cookies.username];
         if (!canEditOfficial(currentUser)) {
             return res.json({ okay: false, error: 'Insufficient permissions' });
         }
@@ -4113,22 +4085,23 @@ site.post('/deleteCategory', async (req, res) => {
         const pathsToRemove = getAllDescendantPaths(category);
         
         // Remove from parent's children array
+        const settings = await getSettings();
         const parent = findParentByChildPath(path);
         if (parent) {
             parent.children = parent.children.filter(c => c.path !== path);
         } else {
             // Remove from root
-            storage.officialCategories.categories = storage.officialCategories.categories.filter(c => c.path !== path);
+            settings.officialCategories.categories = settings.officialCategories.categories.filter(c => c.path !== path);
         }
         
         // Remove all paths from all Miis
         let totalUpdated = 0;
-        pathsToRemove.forEach(pathToRemove => {
-            const updated = removeCategoryFromAllMiis(pathToRemove);
+        for (const pathToRemove of pathsToRemove) {
+            const updated = await removeCategoryFromAllMiis(pathToRemove);
             totalUpdated += updated;
-        });
+        }
 
-        save();
+        await updateSettings({ officialCategories: settings.officialCategories });
 
         makeReport(JSON.stringify({
             embeds: [{
@@ -4161,7 +4134,7 @@ site.post('/deleteCategory', async (req, res) => {
             }]
         }));
 
-        res.json({ okay: true, categories: storage.officialCategories.categories, updatedMiis: totalUpdated });
+        res.json({ okay: true, categories: settings.officialCategories.categories, updatedMiis: totalUpdated });
     } catch (e) {
         console.error('Error deleting category:', e);
         res.json({ okay: false, error: 'Server error' });
@@ -4175,11 +4148,11 @@ site.post('/moveCategory', async (req, res) => {
             return res.json({ okay: false, error: 'Not authenticated' });
         }
 
-        if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+        const currentUser = await getUserByUsername(req.cookies.username);
+        if (!currentUser || !validatePassword(req.cookies.token, currentUser.salt, currentUser.token)) {
             return res.json({ okay: false, error: 'Invalid token' });
         }
 
-        const currentUser = storage.users[req.cookies.username];
         if (!canEditOfficial(currentUser)) {
             return res.json({ okay: false, error: 'Insufficient permissions' });
         }
@@ -4208,11 +4181,12 @@ site.post('/moveCategory', async (req, res) => {
         const oldPaths = getAllDescendantPaths(category);
 
         // Remove from current parent
+        const settings = await getSettings();
         const oldParent = findParentByChildPath(categoryPath);
         if (oldParent) {
             oldParent.children = oldParent.children.filter(c => c.path !== categoryPath);
         } else {
-            storage.officialCategories.categories = storage.officialCategories.categories.filter(c => c.path !== categoryPath);
+            settings.officialCategories.categories = settings.officialCategories.categories.filter(c => c.path !== categoryPath);
         }
 
         // Add to new parent
@@ -4220,7 +4194,7 @@ site.post('/moveCategory', async (req, res) => {
         let newSiblings;
         if (!newParentPath) {
             // Move to root
-            newSiblings = storage.officialCategories.categories;
+            newSiblings = settings.officialCategories.categories;
             newParentNode = null;
         } else {
             newParentNode = findCategoryByPath(newParentPath);
@@ -4246,11 +4220,11 @@ site.post('/moveCategory', async (req, res) => {
         // Update all Miis
         let totalUpdated = 0;
         for (let i = 0; i < oldPaths.length; i++) {
-            const updated = renameCategoryInAllMiis(oldPaths[i], newPaths[i]);
+            const updated = await renameCategoryInAllMiis(oldPaths[i], newPaths[i]);
             totalUpdated += updated;
         }
 
-        save();
+        await updateSettings({ officialCategories: settings.officialCategories });
 
         makeReport(JSON.stringify({
             embeds: [{
@@ -4283,7 +4257,7 @@ site.post('/moveCategory', async (req, res) => {
             }]
         }));
 
-        res.json({ okay: true, categories: storage.officialCategories.categories, updatedMiis: totalUpdated });
+        res.json({ okay: true, categories: settings.officialCategories.categories, updatedMiis: totalUpdated });
     } catch (e) {
         console.error('Error moving category:', e);
         res.json({ okay: false, error: 'Server error' });
@@ -4292,10 +4266,8 @@ site.post('/moveCategory', async (req, res) => {
 // Get all official categories (for building forms)
 site.get('/getOfficialCategories', async (req, res) => {
     try {
-        if (!storage.officialCategories) {
-            storage.officialCategories = {};
-        }
-        res.json({ okay: true, categories: storage.officialCategories });
+        const settings = await getSettings();
+        res.json({ okay: true, categories: settings.officialCategories });
     } catch (e) {
         console.error('Error getting categories:', e);
         res.json({ okay: false, error: 'Server error' });
@@ -4308,19 +4280,22 @@ site.post('/publishMii', async (req, res) => {
             return res.json({ okay: false, error: 'Not authenticated' });
         }
 
-        if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+        const user = await getUserByUsername(req.cookies.username);
+        if (!user) {
+            return res.json({ okay: false, error: 'User not found' });
+        }
+
+        if (!validatePassword(req.cookies.token, user.salt, user.token)) {
             return res.json({ okay: false, error: 'Invalid token' });
         }
 
         const { miiId } = req.body;
-        const user = storage.users[req.cookies.username];
         
-        if (!user.privateMiis) user.privateMiis = [];
-        if (!user.privateMiis.includes(miiId)) {
+        if (!user.privateMiis || !user.privateMiis.includes(miiId)) {
             return res.json({ okay: false, error: 'Mii not found in your private collection' });
         }
 
-        const mii = storage.privateMiis[miiId];
+        const mii = await Mii.findOne({ id: miiId, private: true }).lean();
         if (!mii) {
             return res.json({ okay: false, error: 'Mii data not found' });
         }
@@ -4354,21 +4329,20 @@ site.post('/publishMii', async (req, res) => {
             miijs.write3DSQR(mii, `./static/miiQRs/${mii.id}.png`);
         }
 
-        // Update Mii status
-        mii.published = true;
+        // Update Mii status to published and public
+        await Mii.findOneAndUpdate(
+            { id: miiId },
+            { $set: { private: false, published: true } }
+        );
         
-        // Move to public storage
-        storage.miis[miiId] = mii;
-        Object.keys(storage.miis).push(miiId);
-        
-        if (!user.submissions) user.submissions = [];
-        user.submissions.push(miiId);
-        
-        // Remove from private storage
-        user.privateMiis.splice(user.privateMiis.indexOf(miiId), 1);
-        delete storage.privateMiis[miiId];
-        
-        save();
+        // Move to user's submissions and remove from privateMiis
+        await User.findOneAndUpdate(
+            { username: req.cookies.username },
+            {
+                $push: { submissions: miiId },
+                $pull: { privateMiis: miiId }
+            }
+        );
 
         // Notify Discord
         var d = new Date();
@@ -4418,25 +4392,35 @@ site.post('/blockMiiFromPublishing', async (req, res) => {
             return res.json({ okay: false, error: 'Not authenticated' });
         }
 
-        if (!validatePassword(req.cookies.token, storage.users[req.cookies.username].salt, storage.users[req.cookies.username].token)) {
+        const user = await getUserByUsername(req.cookies.username);
+        if (!user) {
+            return res.json({ okay: false, error: 'User not found' });
+        }
+
+        if (!validatePassword(req.cookies.token, user.salt, user.token)) {
             return res.json({ okay: false, error: 'Invalid token' });
         }
 
-        if (!canModerate(storage.users[req.cookies.username])) {
+        if (!canModerate(user)) {
             return res.json({ okay: false, error: 'Not authorized' });
         }
 
         const { miiId, reason } = req.body;
 
-        const mii = storage.privateMiis[miiId];
+        const mii = await Mii.findOne({ id: miiId, private: true }).lean();
         if (!mii) {
             return res.json({ okay: false, error: 'Private Mii not found' });
         }
 
-        mii.blockedFromPublishing = true;
-        mii.blockReason = reason || 'No reason provided';
-        
-        save();
+        await Mii.findOneAndUpdate(
+            { id: miiId },
+            { 
+                $set: { 
+                    blockedFromPublishing: true,
+                    blockReason: reason || 'No reason provided'
+                }
+            }
+        );
 
         makeReport(JSON.stringify({
             embeds: [{
@@ -4520,7 +4504,8 @@ site.post('/convertMii', upload.single('mii'), async (req, res) => {
     }
 });
 site.post('/signup', async (req, res) => {
-    if (storage.users[req.body.username] || !validate(req.body.username)) {
+    const existingUser = await getUserByUsername(req.body.username);
+    if (existingUser || !validate(req.body.username)) {
         res.send("Username Invalid");
         return;
     }
@@ -4528,13 +4513,16 @@ site.post('/signup', async (req, res) => {
     // Check IP ban
     const clientIP = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
     const ipHash = hashIP(clientIP);
-    if (storage.bannedIPs.includes(ipHash)) {
+    const settings = await getSettings();
+    if (settings.bannedIPs.includes(ipHash)) {
         return res.send('This IP address has been permanently banned from creating accounts.');
     }
     
     var hashed = hashPassword(req.body.pass);
     var token = genToken();
-    storage.users[req.body.username] = {
+    
+    await User.create({
+        username: req.body.username,
         salt: hashed.salt,
         pass: hashed.hash,
         verificationToken: hashPassword(token, hashed.salt).hash,
@@ -4542,21 +4530,30 @@ site.post('/signup', async (req, res) => {
         email: req.body.email,
         votedFor: [],
         submissions: [],
+        privateMiis: [],
         miiPfp: "00000",
         roles: [ROLES.BASIC],
         moderator: false
-    };
+    });
     
     let link = "https://infinimii.com/verify?user=" + encodeURIComponent(req.body.username) + "&token=" + encodeURIComponent(token);
     sendEmail(req.body.email, "InfiniMii Verification", "Welcome to InfiniMii! Please verify your email by clicking this link: " + link);
     res.send("Check your email to verify your account!");
-    save();
 });
 site.post('/login', async (req, res) => {
-    if (storage.users[req.body.username].pass === validatePassword(req.body.pass, storage.users[req.body.username].salt), storage.users[req.body.username].pass) {
-        if (storage.users[req.body.username].verified) {
+    const user = await getUserByUsername(req.body.username);
+    if (!user) {
+        res.send("Invalid username or password");
+        return;
+    }
+    
+    if (validatePassword(req.body.pass, user.salt, user.pass)) {
+        if (user.verified) {
             var token = genToken();
-            storage.users[req.body.username].token = hashPassword(token, storage.users[req.body.username].salt).hash;
+            await User.findOneAndUpdate(
+                { username: req.body.username },
+                { $set: { token: hashPassword(token, user.salt).hash } }
+            );
             res.cookie('token', token, { maxAge: 30 * 24 * 60 * 60 * 1000/*1 Month*/ });
             res.cookie('username', req.body.username, { maxAge: 30 * 24 * 60 * 60 * 1000/*1 Month*/ });
         }
@@ -4566,12 +4563,12 @@ site.post('/login', async (req, res) => {
         }
     }
     res.redirect("/");
-    save();
 });
 
-setInterval(() => {
+setInterval(async () => {
     var curTime = new Date();
-    if (curTime.getHours() === 22 && storage.highlightedMiiChangeDay !== curTime.getDay()) {
+    const settings = await getSettings();
+    if (curTime.getHours() === 22 && settings.highlightedMiiChangeDay !== curTime.getDay()) {
         makeReport("**Don't forget to set a new Highlighted Mii!**");
     }
 }, 1000 * 60 * 60);
