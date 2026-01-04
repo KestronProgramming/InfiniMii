@@ -8,6 +8,7 @@ const storage = require("./storage.json");
 const nodemailer = require("nodemailer");
 const cookieParser = require('cookie-parser');
 const compression = require('compression');
+const { connectionPromise } = require("./database");
 var multer = require('multer');
 var upload = multer({ dest: 'uploads/' });
 var globalSalt = process.env.salt;
@@ -409,13 +410,16 @@ function hashPassword(password, s) {
 function validatePassword(password, salt, hash) {
     return hashPassword(password, salt).hash === hash;
 }
-function genToken() {
-    let ret = "";
-    let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    for (var i = 0; i < 15; i++) {
-        ret += chars[Math.floor(Math.random() * chars.length)];
+
+function genToken(length = 15) {
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    const bytes = crypto.randomBytes(length);
+    let token = "";
+
+    for (let i = 0; i < length; i++) {
+        token += chars[bytes[i] % chars.length];
     }
-    return ret;
+    return token;
 }
 
 function sendEmail(to, subj, cont) {
@@ -786,81 +790,65 @@ site.use((req, res, next) => {
     next();
 });
 
-site.listen(8080, async () => {
-    console.log("Starting, do not stop...");
-    
-    // Initialize privateMiis storage if it doesn't exist
-    if (!storage.privateMiis) storage.privateMiis = {};
-    
-    // Ensure directories exist
-    if (!fs.existsSync('./static/privateMiiImgs')) {
-        fs.mkdirSync('./static/privateMiiImgs', { recursive: true });
-    }
-    if (!fs.existsSync('./static/privateMiiQRs')) {
-        fs.mkdirSync('./static/privateMiiQRs', { recursive: true });
-    }
-    if (!fs.existsSync('./static/temp')) {
-        fs.mkdirSync('./static/temp', { recursive: true });
-    }
+connectionPromise.then(() => { // TODO: server error page if DB fails
+    site.listen(8080, async () => {
+        console.log("Starting, do not stop...");
+        
+        // Initialize privateMiis storage if it doesn't exist
+        if (!storage.privateMiis) storage.privateMiis = {};
+        
+        // Ensure directories exist
+        if (!fs.existsSync('./static/privateMiiImgs')) {
+            fs.mkdirSync('./static/privateMiiImgs', { recursive: true });
+        }
+        if (!fs.existsSync('./static/privateMiiQRs')) {
+            fs.mkdirSync('./static/privateMiiQRs', { recursive: true });
+        }
+        if (!fs.existsSync('./static/temp')) {
+            fs.mkdirSync('./static/temp', { recursive: true });
+        }
 
-    // Migrate old flat category structure to nested structure
-    if (storage.officialCategories && !storage.officialCategories.categories) {
-        console.log("Migrating old category structure to nested format...");
-        
-        const oldCategories = storage.officialCategories;
-        const newCategories = { categories: [] };
-        
-        // Convert old structure to new
-        Object.keys(oldCategories).forEach(parentName => {
-            const parent = oldCategories[parentName];
-            const newParent = {
-                name: parentName,
-                color: parent.color || "#999999",
-                path: parentName,
-                children: []
-            };
+        // Migrate old flat category structure to nested structure
+        if (storage.officialCategories && !storage.officialCategories.categories) {
+            console.log("Migrating old category structure to nested format...");
             
-            if (parent.subcategories && Array.isArray(parent.subcategories)) {
-                parent.subcategories.forEach(subcat => {
-                    newParent.children.push({
-                        name: subcat,
-                        color: parent.color || "#999999",
-                        path: `${parentName}/${subcat}`,
-                        children: []
+            const oldCategories = storage.officialCategories;
+            const newCategories = { categories: [] };
+            
+            // Convert old structure to new
+            Object.keys(oldCategories).forEach(parentName => {
+                const parent = oldCategories[parentName];
+                const newParent = {
+                    name: parentName,
+                    color: parent.color || "#999999",
+                    path: parentName,
+                    children: []
+                };
+                
+                if (parent.subcategories && Array.isArray(parent.subcategories)) {
+                    parent.subcategories.forEach(subcat => {
+                        newParent.children.push({
+                            name: subcat,
+                            color: parent.color || "#999999",
+                            path: `${parentName}/${subcat}`,
+                            children: []
+                        });
                     });
-                });
-            }
+                }
+                
+                newCategories.categories.push(newParent);
+            });
             
-            newCategories.categories.push(newParent);
-        });
-        
-        storage.officialCategories = newCategories;
-        
-        // Update all official Miis to use paths
-        let miisUpdated = 0;
-        Object.values(storage.miis).forEach(mii => {
-            if (mii.official && mii.officialCategories) {
-                // Convert old category names to paths
-                const newCategories = [];
-                mii.officialCategories.forEach(oldCat => {
-                    // Try to find matching path in new structure
-                    const allCats = getAllCategoriesFlat(storage.officialCategories.categories);
-                    const found = allCats.find(c => c.name === oldCat);
-                    if (found) {
-                        newCategories.push(found.path);
-                    }
-                });
-                mii.officialCategories = newCategories;
-                miisUpdated++;
-            }
-        });
-        
-        // Also update private Miis
-        if (storage.privateMiis) {
-            Object.values(storage.privateMiis).forEach(mii => {
+            storage.officialCategories = newCategories;
+            
+            // Update all official Miis to use paths
+            let miisUpdated = 0;
+            Object.values(storage.miis).forEach(mii => {
                 if (mii.official && mii.officialCategories) {
+                    // Convert old category names to paths
                     const newCategories = [];
                     mii.officialCategories.forEach(oldCat => {
+                        // Try to find matching path in new structure
                         const allCats = getAllCategoriesFlat(storage.officialCategories.categories);
                         const found = allCats.find(c => c.name === oldCat);
                         if (found) {
@@ -871,214 +859,232 @@ site.listen(8080, async () => {
                     miisUpdated++;
                 }
             });
+            
+            // Also update private Miis
+            if (storage.privateMiis) {
+                Object.values(storage.privateMiis).forEach(mii => {
+                    if (mii.official && mii.officialCategories) {
+                        const newCategories = [];
+                        mii.officialCategories.forEach(oldCat => {
+                            const allCats = getAllCategoriesFlat(storage.officialCategories.categories);
+                            const found = allCats.find(c => c.name === oldCat);
+                            if (found) {
+                                newCategories.push(found.path);
+                            }
+                        });
+                        mii.officialCategories = newCategories;
+                        miisUpdated++;
+                    }
+                });
+            }
+            
+            save();
+            console.log(`Migration complete. Updated ${miisUpdated} Miis to use category paths.`);
         }
+
+        console.log("Migration complete - all official Miis have officialCategories arrays");
+
+        // Initialize official categories structure with unlimited nesting
+        if (!storage.officialCategories) {
+            storage.officialCategories = {
+                // Structure: { name: string, color: string, children: [...], path: string }
+                categories: [
+                    {
+                        name: "Games",
+                        color: "#ff6b6b",
+                        path: "Games",
+                        children: [
+                            {
+                                name: "Wii Sports Series",
+                                color: "#ff8787",
+                                path: "Games/Wii Sports Series",
+                                children: [
+                                    { name: "Wii Sports", color: "#ffa3a3", path: "Games/Wii Sports Series/Wii Sports", children: [] },
+                                    { name: "Wii Sports Resort", color: "#ffa3a3", path: "Games/Wii Sports Series/Wii Sports Resort", children: [] },
+                                    { name: "Wii Sports Club", color: "#ffa3a3", path: "Games/Wii Sports Series/Wii Sports Club", children: [] },
+                                    { name: "Nintendo Switch Sports", color: "#ffa3a3", path: "Games/Wii Sports Series/Nintendo Switch Sports", children: [] }
+                                ]
+                            },
+                            {
+                                name: "Wii Play Series",
+                                color: "#ff8787",
+                                path: "Games/Wii Play Series",
+                                children: [
+                                    { name: "Wii Play", color: "#ffa3a3", path: "Games/Wii Play Series/Wii Play", children: [] },
+                                    { name: "Wii Play Motion", color: "#ffa3a3", path: "Games/Wii Play Series/Wii Play Motion", children: [] }
+                                ]
+                            },
+                            {
+                                name: "Wii Fit Series",
+                                color: "#ff8787",
+                                path: "Games/Wii Fit Series",
+                                children: [
+                                    { name: "Wii Fit", color: "#ffa3a3", path: "Games/Wii Fit Series/Wii Fit", children: [] },
+                                    { name: "Wii Fit Plus", color: "#ffa3a3", path: "Games/Wii Fit Series/Wii Fit Plus", children: [] },
+                                    { name: "Wii Fit U", color: "#ffa3a3", path: "Games/Wii Fit Series/Wii Fit U", children: [] }
+                                ]
+                            },
+                            {
+                                name: "Wii Party Series",
+                                color: "#ff8787",
+                                path: "Games/Wii Party Series",
+                                children: [
+                                    { name: "Wii Party", color: "#ffa3a3", path: "Games/Wii Party Series/Wii Party", children: [] },
+                                    { name: "Wii Party U", color: "#ffa3a3", path: "Games/Wii Party Series/Wii Party U", children: [] }
+                                ]
+                            },
+                            {
+                                name: "Mario Kart Series",
+                                color: "#ff8787",
+                                path: "Games/Mario Kart Series",
+                                children: [
+                                    { name: "Mario Kart Wii", color: "#ffa3a3", path: "Games/Mario Kart Series/Mario Kart Wii", children: [] },
+                                    { name: "Mario Kart 7", color: "#ffa3a3", path: "Games/Mario Kart Series/Mario Kart 7", children: [] },
+                                    { name: "Mario Kart 8", color: "#ffa3a3", path: "Games/Mario Kart Series/Mario Kart 8", children: [] }
+                                ]
+                            },
+                            {
+                                name: "Super Smash Bros. Series",
+                                color: "#ff8787",
+                                path: "Games/Super Smash Bros. Series",
+                                children: [
+                                    { name: "Super Smash Bros. for 3DS/Wii U", color: "#ffa3a3", path: "Games/Super Smash Bros. Series/Super Smash Bros. for 3DS/Wii U", children: [] },
+                                    { name: "Super Smash Bros. Ultimate", color: "#ffa3a3", path: "Games/Super Smash Bros. Series/Super Smash Bros. Ultimate", children: [] }
+                                ]
+                            },
+                            {
+                                name: "Tomodachi Series",
+                                color: "#ff8787",
+                                path: "Games/Tomodachi Series",
+                                children: [
+                                    { name: "Tomodachi Collection", color: "#ffa3a3", path: "Games/Tomodachi Series/Tomodachi Collection", children: [] },
+                                    { name: "Tomodachi Life", color: "#ffa3a3", path: "Games/Tomodachi Series/Tomodachi Life", children: [] }
+                                ]
+                            },
+                            { name: "Miitopia", color: "#ff8787", path: "Games/Miitopia", children: [] },
+                            { name: "Wii Music", color: "#ff8787", path: "Games/Wii Music", children: [] },
+                            { name: "Nintendo Land", color: "#ff8787", path: "Games/Nintendo Land", children: [] }
+                        ]
+                    },
+                    {
+                        name: "Consoles",
+                        color: "#4ecdc4",
+                        path: "Consoles",
+                        children: [
+                            { name: "Wii", color: "#6ed9d0", path: "Consoles/Wii", children: [] },
+                            { name: "Nintendo DS", color: "#6ed9d0", path: "Consoles/Nintendo DS", children: [] },
+                            { name: "Nintendo 3DS", color: "#6ed9d0", path: "Consoles/Nintendo 3DS", children: [] },
+                            { name: "Wii U", color: "#6ed9d0", path: "Consoles/Wii U", children: [] },
+                            { name: "Nintendo Switch", color: "#6ed9d0", path: "Consoles/Nintendo Switch", children: [] }
+                        ]
+                    },
+                    {
+                        name: "Other",
+                        color: "#95e1d3",
+                        path: "Other",
+                        children: [
+                            { name: "Promo Material", color: "#ade8dd", path: "Other/Promo Material", children: [] },
+                            { name: "E3 Demos", color: "#ade8dd", path: "Other/E3 Demos", children: [] },
+                            { name: "Internal/Debug", color: "#ade8dd", path: "Other/Internal/Debug", children: [] },
+                            { name: "System Defaults", color: "#ade8dd", path: "Other/System Defaults", children: [] }
+                        ]
+                    }
+                ]
+            };
+        }
+
+        console.log("Official categories initialized with nested structure");
         
-        save();
-        console.log(`Migration complete. Updated ${miisUpdated} Miis to use category paths.`);
-    }
-
-    console.log("Migration complete - all official Miis have officialCategories arrays");
-
-    // Initialize official categories structure with unlimited nesting
-    if (!storage.officialCategories) {
-        storage.officialCategories = {
-            // Structure: { name: string, color: string, children: [...], path: string }
-            categories: [
-                {
-                    name: "Games",
-                    color: "#ff6b6b",
-                    path: "Games",
-                    children: [
-                        {
-                            name: "Wii Sports Series",
-                            color: "#ff8787",
-                            path: "Games/Wii Sports Series",
-                            children: [
-                                { name: "Wii Sports", color: "#ffa3a3", path: "Games/Wii Sports Series/Wii Sports", children: [] },
-                                { name: "Wii Sports Resort", color: "#ffa3a3", path: "Games/Wii Sports Series/Wii Sports Resort", children: [] },
-                                { name: "Wii Sports Club", color: "#ffa3a3", path: "Games/Wii Sports Series/Wii Sports Club", children: [] },
-                                { name: "Nintendo Switch Sports", color: "#ffa3a3", path: "Games/Wii Sports Series/Nintendo Switch Sports", children: [] }
-                            ]
-                        },
-                        {
-                            name: "Wii Play Series",
-                            color: "#ff8787",
-                            path: "Games/Wii Play Series",
-                            children: [
-                                { name: "Wii Play", color: "#ffa3a3", path: "Games/Wii Play Series/Wii Play", children: [] },
-                                { name: "Wii Play Motion", color: "#ffa3a3", path: "Games/Wii Play Series/Wii Play Motion", children: [] }
-                            ]
-                        },
-                        {
-                            name: "Wii Fit Series",
-                            color: "#ff8787",
-                            path: "Games/Wii Fit Series",
-                            children: [
-                                { name: "Wii Fit", color: "#ffa3a3", path: "Games/Wii Fit Series/Wii Fit", children: [] },
-                                { name: "Wii Fit Plus", color: "#ffa3a3", path: "Games/Wii Fit Series/Wii Fit Plus", children: [] },
-                                { name: "Wii Fit U", color: "#ffa3a3", path: "Games/Wii Fit Series/Wii Fit U", children: [] }
-                            ]
-                        },
-                        {
-                            name: "Wii Party Series",
-                            color: "#ff8787",
-                            path: "Games/Wii Party Series",
-                            children: [
-                                { name: "Wii Party", color: "#ffa3a3", path: "Games/Wii Party Series/Wii Party", children: [] },
-                                { name: "Wii Party U", color: "#ffa3a3", path: "Games/Wii Party Series/Wii Party U", children: [] }
-                            ]
-                        },
-                        {
-                            name: "Mario Kart Series",
-                            color: "#ff8787",
-                            path: "Games/Mario Kart Series",
-                            children: [
-                                { name: "Mario Kart Wii", color: "#ffa3a3", path: "Games/Mario Kart Series/Mario Kart Wii", children: [] },
-                                { name: "Mario Kart 7", color: "#ffa3a3", path: "Games/Mario Kart Series/Mario Kart 7", children: [] },
-                                { name: "Mario Kart 8", color: "#ffa3a3", path: "Games/Mario Kart Series/Mario Kart 8", children: [] }
-                            ]
-                        },
-                        {
-                            name: "Super Smash Bros. Series",
-                            color: "#ff8787",
-                            path: "Games/Super Smash Bros. Series",
-                            children: [
-                                { name: "Super Smash Bros. for 3DS/Wii U", color: "#ffa3a3", path: "Games/Super Smash Bros. Series/Super Smash Bros. for 3DS/Wii U", children: [] },
-                                { name: "Super Smash Bros. Ultimate", color: "#ffa3a3", path: "Games/Super Smash Bros. Series/Super Smash Bros. Ultimate", children: [] }
-                            ]
-                        },
-                        {
-                            name: "Tomodachi Series",
-                            color: "#ff8787",
-                            path: "Games/Tomodachi Series",
-                            children: [
-                                { name: "Tomodachi Collection", color: "#ffa3a3", path: "Games/Tomodachi Series/Tomodachi Collection", children: [] },
-                                { name: "Tomodachi Life", color: "#ffa3a3", path: "Games/Tomodachi Series/Tomodachi Life", children: [] }
-                            ]
-                        },
-                        { name: "Miitopia", color: "#ff8787", path: "Games/Miitopia", children: [] },
-                        { name: "Wii Music", color: "#ff8787", path: "Games/Wii Music", children: [] },
-                        { name: "Nintendo Land", color: "#ff8787", path: "Games/Nintendo Land", children: [] }
-                    ]
-                },
-                {
-                    name: "Consoles",
-                    color: "#4ecdc4",
-                    path: "Consoles",
-                    children: [
-                        { name: "Wii", color: "#6ed9d0", path: "Consoles/Wii", children: [] },
-                        { name: "Nintendo DS", color: "#6ed9d0", path: "Consoles/Nintendo DS", children: [] },
-                        { name: "Nintendo 3DS", color: "#6ed9d0", path: "Consoles/Nintendo 3DS", children: [] },
-                        { name: "Wii U", color: "#6ed9d0", path: "Consoles/Wii U", children: [] },
-                        { name: "Nintendo Switch", color: "#6ed9d0", path: "Consoles/Nintendo Switch", children: [] }
-                    ]
-                },
-                {
-                    name: "Other",
-                    color: "#95e1d3",
-                    path: "Other",
-                    children: [
-                        { name: "Promo Material", color: "#ade8dd", path: "Other/Promo Material", children: [] },
-                        { name: "E3 Demos", color: "#ade8dd", path: "Other/E3 Demos", children: [] },
-                        { name: "Internal/Debug", color: "#ade8dd", path: "Other/Internal/Debug", children: [] },
-                        { name: "System Defaults", color: "#ade8dd", path: "Other/System Defaults", children: [] }
-                    ]
+        // Ensure privateMiis array for all users
+        Object.keys(storage.users).forEach(username => {
+            if (!storage.users[username].privateMiis) {
+                storage.users[username].privateMiis = [];
+            }
+        });
+        
+        // For Quickly Uploading Batches of Miis
+        await Promise.all(
+            fs.readdirSync("./quickUploads").map(async (file) => {
+                let mii;
+                switch (file.split(".").pop().toLowerCase()) {
+                    case "mii":
+                        mii = await miijs.convertMii(await miijs.readWiiBin(`./quickUploads/${file}`));
+                    break;
+                    case "png"://Do the same as JPG
+                    case "jpg":
+                        mii = await miijs.read3DSQR(`./quickUploads/${file}`);
+                    break;
+                    case "txt"://Don't go to default handler, but don't do anything
+                    return;
+                    default:
+                        fs.unlinkSync(`./quickUploads/${file}`);
+                    return;
                 }
-            ]
-        };
-    }
-
-    console.log("Official categories initialized with nested structure");
-    
-    // Ensure privateMiis array for all users
-    Object.keys(storage.users).forEach(username => {
-        if (!storage.users[username].privateMiis) {
-            storage.users[username].privateMiis = [];
-        }
-    });
-    
-    // For Quickly Uploading Batches of Miis
-    await Promise.all(
-        fs.readdirSync("./quickUploads").map(async (file) => {
-            let mii;
-            switch (file.split(".").pop().toLowerCase()) {
-                case "mii":
-                    mii = await miijs.convertMii(await miijs.readWiiBin(`./quickUploads/${file}`));
-                break;
-                case "png"://Do the same as JPG
-                case "jpg":
-                    mii = await miijs.read3DSQR(`./quickUploads/${file}`);
-                break;
-                case "txt"://Don't go to default handler, but don't do anything
-                return;
-                default:
+                
+                if (!mii) {
+                    console.warn(`Couldn't read ${file}`);
                     fs.unlinkSync(`./quickUploads/${file}`);
-                return;
-            }
-            
-            if (!mii) {
-                console.warn(`Couldn't read ${file}`);
+                    return;
+                }
+                
+                mii.uploadedOn = Date.now();
+                mii.uploader = fs.readFileSync("./quickUploads/uploader.txt", "utf-8");
+                mii.official = mii.uploader === "Nintendo";
+                mii.votes = 1;
+                mii.id = genId();
+                mii.desc = "Uploaded in Bulk";
+                
+                storage.miis[mii.id] = mii;
+                Object.keys(storage.miis).push(mii.id);
+                (storage.users[mii.uploader] ??= { submissions: [] }).submissions.push(mii.id);
+                
                 fs.unlinkSync(`./quickUploads/${file}`);
-                return;
-            }
-            
-            mii.uploadedOn = Date.now();
-            mii.uploader = fs.readFileSync("./quickUploads/uploader.txt", "utf-8");
-            mii.official = mii.uploader === "Nintendo";
-            mii.votes = 1;
-            mii.id = genId();
-            mii.desc = "Uploaded in Bulk";
-            
-            storage.miis[mii.id] = mii;
-            Object.keys(storage.miis).push(mii.id);
-            (storage.users[mii.uploader] ??= { submissions: [] }).submissions.push(mii.id);
-            
-            fs.unlinkSync(`./quickUploads/${file}`);
-            console.log(`Added ${mii.meta.name} from quick uploads`);
-        })
-    );
-    console.log("Finished Checking Quick Uploads Folder");
-    
-    // For ensuring QRs are readable
-    await Promise.all(
-        fs.readdirSync("./static/miiQRs").map(async (file) => {
-            try {
-                if (!fs.existsSync(`./static/miiQRs/${file}`)) return;
-                const mii = await miijs.read3DSQR(`./static/miiQRs/${file}`);
-                if (!mii?.meta?.name) {
+                console.log(`Added ${mii.meta.name} from quick uploads`);
+            })
+        );
+        console.log("Finished Checking Quick Uploads Folder");
+        
+        // For ensuring QRs are readable
+        await Promise.all(
+            fs.readdirSync("./static/miiQRs").map(async (file) => {
+                try {
+                    if (!fs.existsSync(`./static/miiQRs/${file}`)) return;
+                    const mii = await miijs.read3DSQR(`./static/miiQRs/${file}`);
+                    if (!mii?.meta?.name) {
+                        fs.unlinkSync(`./static/miiQRs/${file}`);
+                    }
+                }
+                catch (e) {
                     fs.unlinkSync(`./static/miiQRs/${file}`);
                 }
-            }
-            catch (e) {
-                fs.unlinkSync(`./static/miiQRs/${file}`);
-            }
-        })
-    );
-    console.log("Ensured QRs Are Readable For All Miis");
-    
-    // Make sure QRs and Thumbnails exist
-    await Promise.all(
-        Object.keys(storage.miis).map(async (miiKey) => {
-            const mii = storage.miis[miiKey];
-            
-            if (!fs.existsSync(`./static/miiImgs/${mii.id}.png`)) {
-                fs.writeFileSync(`./static/miiImgs/${mii.id}.png`, await miijs.renderMii(mii));
-                console.log(`Making image for ${mii.id}`);
-            }
-            
-            if (!fs.existsSync(`./static/miiQRs/${mii.id}.png`)) {
-                miijs.write3DSQR(mii, `./static/miiQRs/${mii.id}.png`);
-                console.log(`Making QR for ${mii.id}`);
-            }
-        })
-    );
-    console.log(`Ensured All Miis Have QRs And Face Renders\nGenerating new average Mii...`);
-    getAverageMii();
-    setInterval(getAverageMii,1800000);//30 Mins, should be adjusted for actual need - if the site gets big, every time a Mii is made will be too frequent, but 30 mins will be too long. If the site remains small, 30 mins will be far too frequent.
-    fs.writeFileSync(`./static/miiImgs/average.png`, await miijs.renderMii(storage.miis.average));
-    await miijs.write3DSQR(storage.miis.average, `./static/miiQRs/average.png`);
-    save();
-    console.log(`All setup finished.\nOnline`);
+            })
+        );
+        console.log("Ensured QRs Are Readable For All Miis");
+        
+        // Make sure QRs and Thumbnails exist
+        await Promise.all(
+            Object.keys(storage.miis).map(async (miiKey) => {
+                const mii = storage.miis[miiKey];
+                
+                if (!fs.existsSync(`./static/miiImgs/${mii.id}.png`)) {
+                    fs.writeFileSync(`./static/miiImgs/${mii.id}.png`, await miijs.renderMii(mii));
+                    console.log(`Making image for ${mii.id}`);
+                }
+                
+                if (!fs.existsSync(`./static/miiQRs/${mii.id}.png`)) {
+                    miijs.write3DSQR(mii, `./static/miiQRs/${mii.id}.png`);
+                    console.log(`Making QR for ${mii.id}`);
+                }
+            })
+        );
+        console.log(`Ensured All Miis Have QRs And Face Renders\nGenerating new average Mii...`);
+        getAverageMii();
+        setInterval(getAverageMii,1800000);//30 Mins, should be adjusted for actual need - if the site gets big, every time a Mii is made will be too frequent, but 30 mins will be too long. If the site remains small, 30 mins will be far too frequent.
+        fs.writeFileSync(`./static/miiImgs/average.png`, await miijs.renderMii(storage.miis.average));
+        await miijs.write3DSQR(storage.miis.average, `./static/miiQRs/average.png`);
+        save();
+        console.log(`All setup finished.\nOnline`);
+    });
 });
 
 site.get('/', async (req, res) => {
