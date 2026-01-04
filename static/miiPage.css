@@ -223,6 +223,7 @@
     flex-wrap: wrap;
     position: relative;
     overflow: visible;
+    border-radius:0px 0px 15px 15px;
 }
 
 .btn-primary,

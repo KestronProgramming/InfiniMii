@@ -2801,7 +2801,7 @@ site.post('/changeUserPfp', async (req, res) => {
         res.json({ okay: false, error: 'Server error' });
     }
 });
-site.get('/voteMii', async (req, res) => {
+site.post('/voteMii', async (req, res) => {
     if (!req.query.id) {
         res.send("{'error':'No ID specified'}");
         return;
@@ -3522,7 +3522,6 @@ site.post('/deleteAccount', async (req, res) => {
                 submissions: [],
                 miiPfp: "00000",
                 roles: [ROLES.BASIC],
-                moderator: false
             });
         }
 
@@ -4533,7 +4532,6 @@ site.post('/signup', async (req, res) => {
         privateMiis: [],
         miiPfp: "00000",
         roles: [ROLES.BASIC],
-        moderator: false
     });
     
     let link = "https://infinimii.com/verify?user=" + encodeURIComponent(req.body.username) + "&token=" + encodeURIComponent(token);

@@ -41,7 +41,6 @@ const userSchema = new mongoose.Schema({
     submissions: { type: [String], default: [] },
     miiPfp: { type: String, default: "00000" },
     roles: { type: [String], default: ["basic"] },
-    moderator: { type: Boolean, default: false },
     token: String,
     verified: { type: Boolean, default: false },
     privateMiis: { type: [String], default: [] },
