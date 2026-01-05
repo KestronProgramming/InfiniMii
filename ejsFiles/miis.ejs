@@ -9,11 +9,11 @@
     </head>
 
     <body>
-        <%- partials.globalStyle %>
-        <%- partials.header %>
-        <%- partials.accountDisplay %>
+        <%- include('globalStyle') %>
+        <%- include('header') %>
+        <%- include('accountDisplay') %>
         <div class="content">
-            <%- partials.sidebar %>
+            <%- include('sidebar') %>
             <div id="browse-miis">
                 <% for(var i=0;i<displayedMiis.length&&i<50;i++){ %>
                     <div class="mii-card" style="--favorite-color: <%= decodeColor(displayedMiis[i].general?.favoriteColor) || decodeColor(0) %>;" id="<%= displayedMiis[i].id %>">
@@ -28,9 +28,9 @@
                     </div>
                 <% } %>
             </div>
-            <%- partials.featuredMiis %>
+            <%- include('featuredMiis') %>
         </div>
-        <%- partials.footer %>
+        <%- include('footer') %>
         <script src="/global.js"></script>
     </body>
 </html>

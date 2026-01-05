@@ -17,12 +17,6 @@ process.env=require("./env.json");
 const PRIVATE_MII_LIMIT = process.env.privateMiiLimit;
 const baseUrl=process.env.baseUrl;
 
-var partials={};
-fs.readdirSync("./partials").forEach(file=>{
-    if(!file.endsWith(".html")) return;
-    partials[file.split(".")[0]]=fs.readFileSync(`./partials/${file}`,"utf-8");
-});
-
 function bitStringToBuffer(bitString) {
   const byteLength = Math.ceil(bitString.length / 8);
   const buffer = Buffer.alloc(byteLength);
@@ -137,24 +131,7 @@ async function getSendables(req, title, user) {
         title: title,
         userPfpMiiColor: userPfpMiiColor ?? "#111111",
     };
-    
-    send.partials=structuredClone(partials);
-    
-    // Render EJS partials synchronously
-    const ejsFiles = fs.readdirSync(`./ejsPartials`).filter(file => file.endsWith(".ejs"));
-    for (const file of ejsFiles) {
-        try {
-            const str = await new Promise((resolve, reject) => {
-                ejs.renderFile(`./ejsPartials/${file}`, send, {}, function(err, str) {
-                    if (err) reject(err);
-                    else resolve(str);
-                });
-            });
-            send.partials[file.split(".")[0]] = str;
-        } catch (err) {
-            console.error(`Error rendering ${file}:`, err);
-        }
-    }
+
     send.currentFilter=send.currentFilter||"";
     return send;
 }
@@ -814,6 +791,7 @@ site.use(express.urlencoded({ extended: true }));
 site.use(express.static(path.join(__dirname + '/static')));
 site.use(cookieParser());
 site.use('/favicon.ico', express.static('static/favicon.png'));
+  
 
 //#region Middleware
 
@@ -916,6 +894,25 @@ site.use(compression({
 
 //#region Static handling
 
+// Patch ejs renderFile to resolve the ejsPartials at root, making includes shorter
+ejs.renderFile = ((orig) => {
+    return function (file, data, opts = {}, cb) {
+        return orig.call(
+            this,
+            file,
+            data,
+            {
+                views: [
+                    path.join(__dirname, 'ejsFiles'),
+                    path.join(__dirname, 'ejsPartials')
+                ],
+                ...opts
+            },
+            cb
+        );
+    };
+})(ejs.renderFile)
+  
 // Serve private Mii images with authentication
 site.use('/privateMiiImgs', async (req, res, next) => {
     const miiId = req.path.split('/').pop().split('.')[0];
@@ -1116,7 +1113,7 @@ site.get('/', async (req, res) => {
         "Recent":{miis:await api("recent",5),link:"./recent"},
         "Official":{miis:await api("official",5),link:"./official"}
     };
-    ejs.renderFile(toSend.thisUser.toLowerCase()==="default"?'./ejsFiles/about.ejs':'./ejsFiles/index.ejs', toSend, {}, function(err, str) {
+    ejs.renderFile(toSend.thisUser.toLowerCase() === "default" ? './ejsFiles/about.ejs' : './ejsFiles/index.ejs', toSend, {}, function (err, str) {
         if (err) {
             res.send(err);
             console.log(err);
@@ -2836,6 +2833,8 @@ site.get('/mii/:id', async (req, res) => {
 
     // Override mii color for this page
     inp.userPfpMiiColor = mii.general.favoriteColor;
+
+    // debugger
 
     ejs.renderFile('./ejsFiles/miiPage.ejs', inp, {}, function(err, str) {
         if (err) {

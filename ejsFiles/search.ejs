@@ -7,19 +7,19 @@
         const canonicalUrl = baseUrl + '/search';
         const keywords = 'search mii, find mii character, mii database, mii search engine';
         %>
-        <%- partials.metaTags %>
-        <%- partials.structuredData %>
-        <%- partials.faqSchema %>
+        <%- include('metaTags') %>
+        <%- include('structuredData') %>
+        <%- include('faqSchema') %>
         
         <link rel="stylesheet" href="./global.css">
         <link rel="stylesheet" href="utilityPages.css">
     </head>
     <body>
-        <%- partials.globalStyle %>
-        <%- partials.header %>
-        <%- partials.accountDisplay %>
+        <%- include('globalStyle') %>
+        <%- include('header') %>
+        <%- include('accountDisplay') %>
         <main class="content" role="main">
-            <%- partials.sidebar %>
+            <%- include('sidebar') %>
             <section class="utility-container" aria-labelledby="search-heading">
                 <form method="GET" action="/searchResults" role="search">
                     <fieldset>
@@ -41,9 +41,9 @@
                     </fieldset>
                 </form>
             </section>
-            <%- partials.featuredMiis %>
+            <%- include('featuredMiis') %>
         </main>
-        <%- partials.footer %>
+        <%- include('footer') %>
         <script src="/global.js"></script>
     </body>
 </html>

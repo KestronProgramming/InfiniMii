@@ -7,11 +7,11 @@
         <link rel="stylesheet" href="manageCategories.css">
     </head>
     <body>
-        <%- partials.globalStyle %>
-        <%- partials.header %>
-        <%- partials.accountDisplay %>
+        <%- include('globalStyle') %>
+        <%- include('header') %>
+        <%- include('accountDisplay') %>
         <div class='content'>
-            <%- partials.sidebar %>
+            <%- include('sidebar') %>
             
             <div class='category-management'>
                 <div class="header">
@@ -42,7 +42,7 @@
                 </div>
             </div>
         </div>
-        <%- partials.footer %>
+        <%- include('footer') %>
         
         <script>
             let categories = [];

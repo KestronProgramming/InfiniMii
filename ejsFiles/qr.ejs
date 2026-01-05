@@ -7,11 +7,11 @@
         <link rel="stylesheet" href="utilityPages.css">
     </head>
     <body>
-        <%- partials.globalStyle %>
-        <%- partials.header %>
-        <%- partials.accountDisplay %>
+        <%- include('globalStyle') %>
+        <%- include('header') %>
+        <%- include('accountDisplay') %>
         <div class="content">
-            <%- partials.sidebar %>
+            <%- include('sidebar') %>
             <form method="POST" enctype="multipart/form-data" action="/convertMii" class="convert" hidden>
                 <fieldset>
                     <legend>Convert</legend>
@@ -57,9 +57,9 @@
                     <div id="outputMessage">No QR code detected.</div>
                 </div>
             </div>
-            <%- partials.featuredMiis %>
+            <%- include('featuredMiis') %>
         </div>
-        <%- partials.footer %>
+        <%- include('footer') %>
         <script src="./easy.qrcode.js" type="text/javascript" charset="utf-8"></script>
         <script src="./jsQR.js"></script>
         <script src="/global.js"></script>

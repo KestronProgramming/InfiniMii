@@ -9,17 +9,17 @@
     const pageDesc = 'How to cite InfiniMii as a source for Mii character information, research, and data. Includes proper attribution, links, and usage guidelines.';
     const canonicalUrl = `${baseUrl}/cite`;
     %>
-    <%- partials.metaTags %>
+    <%- include('metaTags') %>
     
     <link rel="stylesheet" href="./global.css">
 </head>
 <body>
-    <%- partials.globalStyle %>
-    <%- partials.header %>
-    <%- partials.accountDisplay %>
+    <%- include('globalStyle') %>
+    <%- include('header') %>
+    <%- include('accountDisplay') %>
     
     <main class="content">
-        <%- partials.sidebar %>
+        <%- include('sidebar') %>
         
         <article class="cite-page">
             <h1>Citing InfiniMii</h1>
@@ -84,9 +84,9 @@
             </section>
         </article>
         
-        <%- partials.featuredMiis %>
+        <%- include('featuredMiis') %>
     </main>
     
-    <%- partials.footer %>
+    <%- include('footer') %>
 </body>
 </html>

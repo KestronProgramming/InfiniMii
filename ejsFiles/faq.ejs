@@ -7,8 +7,8 @@
         const canonicalUrl = `${baseUrl}/about`;
         const keywords = 'mii faq, mii questions, what is a mii, mii help, mii guide, nintendo mii, tomodachi life, mii maker';
         %>
-        <%- partials.metaTags %>
-        <%- partials.structuredData %>
+        <%- include('metaTags') %>
+        <%- include('structuredData') %>
         
         <!-- Comprehensive FAQ Schema -->
         <script type="application/ld+json">
@@ -185,12 +185,12 @@
         <link rel="stylesheet" href="/utilityPages.css">
     </head>
     <body>
-        <%- partials.globalStyle %>
-        <%- partials.header %>
-        <%- partials.accountDisplay %>
+        <%- include('globalStyle') %>
+        <%- include('header') %>
+        <%- include('accountDisplay') %>
         
         <main class="content faq-content" role="main">
-            <%- partials.sidebar %>
+            <%- include('sidebar') %>
             
             <article class="faq-article">
                 <h1>Mii Characters: Frequently Asked Questions</h1>
@@ -372,10 +372,10 @@
                 </section>
             </article>
             
-            <%- partials.featuredMiis %>
+            <%- include('featuredMiis') %>
         </main>
         
-        <%- partials.footer %>
+        <%- include('footer') %>
         <script src="/global.js" defer></script>
     </body>
 </html>

@@ -175,10 +175,10 @@
         </style>
     </head>
     <body>
-        <%- partials.header %>
-        <%- partials.accountDisplay %>
+        <%- include('header') %>
+        <%- include('accountDisplay') %>
         <div class='content'>
-            <%- partials.sidebar %>
+            <%- include('sidebar') %>
             <div class='amiibo-tools'>
                 <!-- Extract Mii from Amiibo -->
                 <div class="tool-section">
@@ -276,9 +276,9 @@
                     <div id="insertSuccess" class="success-message"></div>
                 </div>
             </div>
-            <%- partials.featuredMiis %>
+            <%- include('featuredMiis') %>
         </div>
-        <%- partials.footer %>
+        <%- include('footer') %>
         
         <script>
             let extractedMiiData = null;

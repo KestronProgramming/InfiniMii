@@ -6,11 +6,11 @@
         <link rel="stylesheet" href="utilityPages.css">
 	</head>
 	<body>
-        <%- partials.globalStyle %>
-		<%- partials.header %>
-		<%- partials.accountDisplay %>
+        <%- include('globalStyle') %>
+		<%- include('header') %>
+		<%- include('accountDisplay') %>
 		<div class="content">
-			<%- partials.sidebar %>
+			<%- include('sidebar') %>
 			<div class="settings-container">
 				<fieldset>
 					<legend>Profile Settings</legend>
@@ -70,9 +70,9 @@
 				</fieldset>
 			</div>
 
-            <%- partials.featuredMiis %>
+            <%- include('featuredMiis') %>
 		</div>
-		<%- partials.footer %>
+		<%- include('footer') %>
 		<script src="/global.js"></script>
 		<script>
 			async function changePfp() {

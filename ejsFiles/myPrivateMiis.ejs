@@ -7,18 +7,18 @@
         const canonicalUrl = `${baseUrl}/myPrivateMiis`;
         const keywords = 'private miis, mii collection, manage miis';
         %>
-        <%- partials.metaTags %>
-        <%- partials.structuredData %>
+        <%- include('metaTags') %>
+        <%- include('structuredData') %>
         <link rel='stylesheet' href="/global.css">
         <link rel="stylesheet" href="/utilityPages.css">
         <link rel="stylesheet" href="/privateMiis.css">
     </head>
     <body>
-        <%- partials.globalStyle %>
-        <%- partials.header %>
-        <%- partials.accountDisplay %>
+        <%- include('globalStyle') %>
+        <%- include('header') %>
+        <%- include('accountDisplay') %>
         <main class='content' role="main">
-            <%- partials.sidebar %>
+            <%- include('sidebar') %>
             <div class='private-miis-container'>
                 <div class="private-header">
                     <h1><span class="emoji">🔒</span> My Private Miis</h1>
@@ -75,9 +75,9 @@
                     </div>
                 <% } %>
             </div>
-            <%- partials.featuredMiis %>
+            <%- include('featuredMiis') %>
         </main>
-        <%- partials.footer %>
+        <%- include('footer') %>
         
         <script>
             async function publishMii(miiId) {

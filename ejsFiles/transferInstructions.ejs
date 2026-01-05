@@ -6,11 +6,11 @@
         <link rel="stylesheet" href="/utilityPages.css">
     </head>
     <body>
-        <%- partials.globalStyle %>
-        <%- partials.header %>
-        <%- partials.accountDisplay %>
+        <%- include('globalStyle') %>
+        <%- include('header') %>
+        <%- include('accountDisplay') %>
         <div class="content">
-            <%- partials.sidebar %>
+            <%- include('sidebar') %>
             <div class="guide-container">
                 <article>
                     <h1>
@@ -227,9 +227,9 @@
                     </p>
                 </article>
             </div>
-            <%- partials.featuredMiis %>
+            <%- include('featuredMiis') %>
         </div>
-        <%- partials.footer %>
+        <%- include('footer') %>
         <script src="/global.js"></script>
         <script>
             function copyArticleLink(button) {

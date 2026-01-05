@@ -7,8 +7,8 @@
         const canonicalUrl = `${baseUrl}/about`;
         const keywords = 'about infinimii, mii platform, mii repository, mii community';
         %>
-        <%- partials.metaTags %>
-        <%- partials.structuredData %>
+        <%- include('metaTags') %>
+        <%- include('structuredData') %>
         
         <link rel="stylesheet" href="/global.css">
         <link rel="stylesheet" href="/utilityPages.css">
@@ -20,12 +20,12 @@
         </style>
     </head>
     <body>
-        <%- partials.globalStyle %>
-        <%- partials.header %>
-        <%- partials.accountDisplay %>
+        <%- include('globalStyle') %>
+        <%- include('header') %>
+        <%- include('accountDisplay') %>
         
         <main class="content about-content" role="main">
-            <%- partials.sidebar %>
+            <%- include('sidebar') %>
             
             <article class="about-article guide-container">
                 
@@ -150,10 +150,10 @@
                 </article>
             </article>
             
-            <%- partials.featuredMiis %>
+            <%- include('featuredMiis') %>
         </main>
         
-        <%- partials.footer %>
+        <%- include('footer') %>
         <script src="/global.js" defer></script>
     </body>
 </html>

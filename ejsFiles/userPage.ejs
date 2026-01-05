@@ -11,11 +11,11 @@
         <link rel="stylesheet" href="/profile.css">
     </head>
     <body>
-        <%- partials.globalStyle %>
-        <%- partials.header %>
-        <%- partials.accountDisplay %>
+        <%- include('globalStyle') %>
+        <%- include('header') %>
+        <%- include('accountDisplay') %>
         <div class="content">
-            <%- partials.sidebar %>
+            <%- include('sidebar') %>
             <div class="profile-container">
                 <!-- Profile Header -->
                 <div class="profile-header">
@@ -206,10 +206,10 @@
                     <% } %>
                 </div>
             </div>
-            <%- partials.featuredMiis %>
+            <%- include('featuredMiis') %>
         </div>
 
-        <%- partials.footer %>
+        <%- include('footer') %>
 
         <script src="/global.js"></script>
 

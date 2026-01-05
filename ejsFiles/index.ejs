@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <html>
 	<head>
-        <%- partials.metaTags %>
-        <%- partials.structuredData %>
+        <%- include('metaTags') %>
+        <%- include('structuredData') %>
 		<link href="./global.css" rel="stylesheet">
 		<link href="./index.css" rel="stylesheet">
 		<meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -12,11 +12,11 @@
         <link rel="dns-prefetch" href="https://fonts.googleapis.com">
 	</head>
 	<body>
-        <%- partials.globalStyle %>
-		<%- partials.header %>
-        <%- partials.accountDisplay %>
+        <%- include('globalStyle') %>
+		<%- include('header') %>
+        <%- include('accountDisplay') %>
 		<div class="content">
-			<%- partials.sidebar %>
+			<%- include('sidebar') %>
 			<div id="browse-miis">
 				<% Object.keys(miiCategories).forEach(cat=>{ %>
 					<div class="miiCategory">
@@ -30,9 +30,9 @@
 					</div>
 				<% }); %>
 			</div>
-			<%- partials.featuredMiis %>
+			<%- include('featuredMiis') %>
 		</div>
-        <%- partials.footer %>
+        <%- include('footer') %>
 		<script src="/global.js"></script>
 	</body>
 </html>

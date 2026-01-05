@@ -16,9 +16,9 @@
         ];
         %>
         
-        <%- partials.metaTags %>
-        <%- partials.structuredData %>
-        <%- partials.miiSchema %>
+        <%- include('metaTags') %>
+        <%- include('structuredData') %>
+        <%- include('miiSchema') %>
         
         <link rel="stylesheet" href="/global.css">
         <link rel="stylesheet" href="/miiPage.css">
@@ -27,16 +27,16 @@
         <link rel="preload" as="image" href="/miiImgs/<%= mii.id %>.png">
     </head>
     <body>
-        <%- partials.globalStyle %>
+        <%- include('globalStyle') %>
         <% 
             const imgPath = isPrivate ? 'privateMiiImgs' : 'miiImgs';
             const qrPath = isPrivate ? 'privateMiiQRs' : 'miiQRs';
         %>
-        <%- partials.header %>
-        <%- partials.accountDisplay %>
+        <%- include('header') %>
+        <%- include('accountDisplay') %>
 
         <main class="content" role="main">
-            <%- partials.sidebar %>
+            <%- include('sidebar') %>
 
             <article class="mii-id-card" style="--favorite-color: <%= decodeColor(mii.general?.favoriteColor) || decodeColor(0) %>;" itemscope itemtype="https://schema.org/CreativeWork">
                 <!-- Card Header -->
@@ -666,10 +666,10 @@
                     </div>
                 <% } %>
             </article>
-            <%- partials.featuredMiis %>
+            <%- include('featuredMiis') %>
         </main>
         
-        <%- partials.footer %>
+        <%- include('footer') %>
         
         <script src="/global.js"></script>
 

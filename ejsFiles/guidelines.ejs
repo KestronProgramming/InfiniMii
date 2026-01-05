@@ -7,19 +7,19 @@
         const canonicalUrl = baseUrl + '/tos';
         const keywords = 'terms of service, tos, privacy policy, guidelines, rules, limitations, community';
         %>
-        <%- partials.metaTags %>
-        <%- partials.structuredData %>
-        <%- partials.faqSchema %>
+        <%- include('metaTags') %>
+        <%- include('structuredData') %>
+        <%- include('faqSchema') %>
         
         <link rel="stylesheet" href="/global.css">
         <link rel="stylesheet" href="/utilityPages.css">
     </head>
     <body>
-        <%- partials.globalStyle %>
-        <%- partials.header %>
-        <%- partials.accountDisplay %>
+        <%- include('globalStyle') %>
+        <%- include('header') %>
+        <%- include('accountDisplay') %>
         <main class="content" role="main">
-            <%- partials.sidebar %>
+            <%- include('sidebar') %>
             
             <div class="guide-container">
                 <h2>Community Guidelines</h2>
@@ -63,9 +63,9 @@
                 </article>
             </div>
 
-            <%- partials.featuredMiis %>
+            <%- include('featuredMiis') %>
         </main>
-        <%- partials.footer %>
+        <%- include('footer') %>
         <script src="/global.js"></script>
     </body>
 </html>

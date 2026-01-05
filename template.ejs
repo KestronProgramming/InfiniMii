@@ -7,23 +7,23 @@
         const canonicalUrl = baseUrl + '/RESTOFTHEURL';
         const keywords = 'miis, miis, miis, miis, miis, miis';
         %>
-        <%- partials.metaTags %>
-        <%- partials.structuredData %>
-        <%- partials.faqSchema %>
+        <%- include('metaTags') %>
+        <%- include('structuredData') %>
+        <%- include('faqSchema') %>
         
         <link rel="stylesheet" href="/global.css">
     </head>
     <body>
-        <%- partials.header %>
-        <%- partials.accountDisplay %>
+        <%- include('header') %>
+        <%- include('accountDisplay') %>
         <main class="content" role="main">
-            <%- partials.sidebar %>
+            <%- include('sidebar') %>
             
             <!-- CONTENT -->
 
-            <%- partials.featuredMiis %>
+            <%- include('featuredMiis') %>
         </main>
-        <%- partials.footer %>
+        <%- include('footer') %>
         <script src="/global.js"></script>
     </body>
 </html>
