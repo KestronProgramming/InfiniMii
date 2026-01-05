@@ -1,4 +1,4 @@
-
+const helmet = require('helmet');
 const miijs = require("miijs");
 const crypto = require('crypto');
 const fs = require("fs");
@@ -8,8 +8,9 @@ const path = require("path");
 const nodemailer = require("nodemailer");
 const cookieParser = require('cookie-parser');
 const compression = require('compression');
-const { connectionPromise, Mii, User, Settings } = require("./database");
+const { connectionPromise, Mii: Miis, User: Users, Settings } = require("./database");
 var multer = require('multer');
+const { userInfo } = require("os");
 var upload = multer({ dest: 'uploads/' });
 var globalSalt = process.env.salt;
 process.env=require("./env.json");
@@ -22,7 +23,20 @@ fs.readdirSync("./partials").forEach(file=>{
     partials[file.split(".")[0]]=fs.readFileSync(`./partials/${file}`,"utf-8");
 });
 
-// ========== DATABASE ACCESS LAYER ========== //
+function bitStringToBuffer(bitString) {
+  const byteLength = Math.ceil(bitString.length / 8);
+  const buffer = Buffer.alloc(byteLength);
+
+  for (let i = 0; i < bitString.length; i++) {
+    if (bitString[i] === '1') {
+      buffer[i >> 3] |= 1 << (7 - (i & 7));
+    }
+  }
+
+  return buffer;
+}
+
+//#region Database
 async function getSettings() {
     let settings = await Settings.findById("global");
     if (!settings) {
@@ -43,32 +57,45 @@ async function updateSettings(updates) {
 
 async function getAllMiis(includePrivate = false) {
     const query = includePrivate ? {} : { private: false };
-    return await Mii.find(query).lean();
+    return await Miis.find(query).lean();
 }
 
 async function getMiiById(id, includePrivate = false) {
     const query = { id };
     if (!includePrivate) query.private = false;
-    return await Mii.findOne(query).lean();
+    return await Miis.findOne(query).lean();
 }
 
 async function getUserByUsername(username) {
-    return await User.findOne({ username }).lean();
+    return await Users.findOne({ username }).lean();
 }
 
 async function getAllUsers() {
-    return await User.find({}).lean();
+    return await Users.find({}).lean();
+}
+//#endregion
+
+
+const ejsFunctions = {
+    "decodeColor": (colorIndex) => (["Red", "#dd5e17", "#e2cd5e", "Lime", "Green", "Blue", "Cyan", "#e65ba1", "Purple", "Brown", "White", "Black"][colorIndex] || colorIndex)
 }
 
-async function getSendables(req,title){
+/** Build EJS variables for the page. `user` is assumed to be the logged in user */
+async function getSendables(req, title, user) { 
     const currentPath = req.path;
     const queryString = Object.keys(req.query).length > 0 
         ? '?' + new URLSearchParams(req.query).toString() 
         : '';
-    
     const settings = await getSettings();
     const allMiis = await getAllMiis(false);
     const allUsers = await getAllUsers();
+
+    // Build information related to the current user
+    let userPfpMiiColor = null;
+    if (req.user) {
+        const userPfpMii = await getMiiById(req.user.miiPfp, true);
+        userPfpMiiColor = userPfpMii.general.favoriteColor;
+    }
     
     // Build miis object
     const miisObj = {};
@@ -93,8 +120,9 @@ async function getSendables(req,title){
     const pfp = usersObj[currentUser]?.miiPfp || "00000";
     
     var send = {
+        ...ejsFunctions,
         miis: miisObj,
-        users: usersObj,
+        users: usersObj, // TODO: this needs to not be sent
         highlightedMii: settings.highlightedMii,
         bannedIPs: settings.bannedIPs,
         officialCategories: settings.officialCategories,
@@ -106,7 +134,8 @@ async function getSendables(req,title){
         discordInvite: process.env.discordInvite,
         githubLink: process.env.githubLink,
         baseUrl: baseUrl,
-        title: title
+        title: title,
+        userPfpMiiColor: userPfpMiiColor ?? "#111111",
     };
     
     send.partials=structuredClone(partials);
@@ -126,10 +155,11 @@ async function getSendables(req,title){
             console.error(`Error rendering ${file}:`, err);
         }
     }
-    
+    send.currentFilter=send.currentFilter||"";
     return send;
 }
 
+//#region Roles
 // Role System - Array-based for multiple roles
 const ROLES = {
     TEMP_BANNED: 'tempBanned',
@@ -140,6 +170,7 @@ const ROLES = {
     MODERATOR: 'moderator',
     ADMINISTRATOR: 'administrator'
 };
+const OFFICIAL_ROLES = [ ROLES.RESEARCHER, ROLES.MODERATOR, ROLES.ADMINISTRATOR ];
 
 const ROLE_DISPLAY = {
     [ROLES.TEMP_BANNED]: '🚫 Temporarily Banned',
@@ -175,7 +206,7 @@ function canModerate(user) {
 }
 
 // Permission to edit official Miis
-function canEditOfficial(user) {
+function isResearcher(user) {
     return hasRole(user, ROLES.RESEARCHER) || 
            hasRole(user, ROLES.MODERATOR) ||
            hasRole(user, ROLES.ADMINISTRATOR);
@@ -196,7 +227,7 @@ async function isBanned(user) {
             // Unban user - remove temp ban role
             user.roles = user.roles.filter(r => r !== ROLES.TEMP_BANNED);
             delete user.banExpires;
-            await User.findOneAndUpdate({ username: user.username }, { 
+            await Users.findOneAndUpdate({ username: user.username }, { 
                 roles: user.roles,
                 $unset: { banExpires: 1 }
             });
@@ -229,7 +260,8 @@ function removeRole(user, role) {
     // Update legacy moderator flag
     user.roles.includes('moderator') = canModerate(user);
 }
-// Category Tree Helper Functions
+//#endregion
+
 
 // Find a category node by path
 function findCategoryByPath(path, tree) {
@@ -306,7 +338,7 @@ async function renameCategoryInAllMiis(oldPath, newPath) {
     let count = 0;
     
     // Update all Miis (published and private)
-    const miis = await Mii.find({
+    const miis = await Miis.find({
         official: true,
         officialCategories: oldPath
     });
@@ -315,7 +347,7 @@ async function renameCategoryInAllMiis(oldPath, newPath) {
         const index = mii.officialCategories.indexOf(oldPath);
         if (index > -1) {
             mii.officialCategories[index] = newPath;
-            await Mii.findOneAndUpdate(
+            await Miis.findOneAndUpdate(
                 { id: mii.id },
                 { $set: { officialCategories: mii.officialCategories } }
             );
@@ -331,14 +363,14 @@ async function removeCategoryFromAllMiis(path) {
     let count = 0;
     
     // Update all Miis
-    const miis = await Mii.find({
+    const miis = await Miis.find({
         official: true,
         officialCategories: path
     });
     
     for (const mii of miis) {
         mii.officialCategories = mii.officialCategories.filter(c => c !== path);
-        await Mii.findOneAndUpdate(
+        await Miis.findOneAndUpdate(
             { id: mii.id },
             { $set: { officialCategories: mii.officialCategories } }
         );
@@ -358,8 +390,9 @@ function getAllDescendantPaths(node, result = []) {
     }
     return result;
 }
+
 function hashIP(ip) {
-    return crypto.createHash('sha256').update(ip + globalSalt).digest('hex');
+    return crypto.createHash('sha256').update(`${ip}${globalSalt}`).digest('hex');
 }
 
 function isVPN(ip) {
@@ -369,9 +402,6 @@ function isVPN(ip) {
     return false; // TODO: Implement VPN detection
 }
 
-function objCopy(obj) {
-    return JSON.parse(JSON.stringify(obj));
-}
 function shuffleArray(array) {
   for (let i = array.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -384,8 +414,6 @@ function validate(what) {
     return /^(\d|\D){1,15}$/.test(what);
 }
 
-// save() function no longer needed - direct DB writes
-
 //Possibly able to generate 9 Billion IDs before needing a new character, which I doubt we'll ever hit
 async function genId() {
     let ret = "";
@@ -396,7 +424,7 @@ async function genId() {
         for (var i = 0; i < 5; i++) {
             ret += chars[Math.floor(Math.random() * chars.length)];
         }
-        exists = await Mii.exists({ id: ret });
+        exists = await Miis.exists({ id: ret });
     }
     return ret;
 }
@@ -421,7 +449,7 @@ function wilsonMethod(upvotes, uploadedOn) {
 }
 
 async function api(what,limit=50,begin=0,fltr){
-    const allMiis = await Mii.find({ private: false, id: { $ne: "average" } }).lean();
+    const allMiis = await Miis.find({ private: false, id: { $ne: "average" } }).lean();
     const settings = await getSettings();
     
     var newArr;
@@ -607,7 +635,7 @@ function populateNestedArrays(arrayObj, obj) {
     return ret;
 }
 async function getCollectedLeavesAcrossMiis() {
-    const allMiis = await Mii.find({ private: false }).lean();
+    const allMiis = await Miis.find({ private: false }).lean();
     let acc;
     for (const mii of allMiis) {
         acc = acc ? populateNestedArrays(acc, mii) : getNestedAsArrays(mii);
@@ -715,7 +743,11 @@ async function getAverageMii(){
     var avg=averageObjectWithPairs(leaves);
     delete avg._id;
     avg.id = "average";
-    avg.meta = { name: `J${avg.general.gender===0?"ohn":"ane"} Doe`, creatorName: "InfiniMii", type:"3ds" };
+    avg.meta = { 
+        name: `J${avg.general.gender===0?"ohn":"ane"} Doe`, 
+        creatorName: "InfiniMii", 
+        type: "3DS"
+    };
     avg.desc="The most common or average features and placements of those features across all Miis on the website";
     avg.uploader = "Everyone";
     avg.votes = 0;
@@ -724,12 +756,13 @@ async function getAverageMii(){
     avg.published = true;
     
     // Upsert average Mii
-    await Mii.findOneAndUpdate(
+    await Miis.findOneAndUpdate(
         { id: "average" },
         { $set: avg },
         { upsert: true, new: true }
     );
-    console.log("Average Mii upserted successfully");
+    
+    return avg;
 }
 
 // Sitemap generation functions
@@ -775,98 +808,17 @@ function escapeXml(unsafe) {
     });
 }
 
-const site = new express();
+const site = express();
 site.use(express.json());
 site.use(express.urlencoded({ extended: true }));
 site.use(express.static(path.join(__dirname + '/static')));
 site.use(cookieParser());
 site.use('/favicon.ico', express.static('static/favicon.png'));
-site.use(async (req, res, next) => {
-    // Check if user is banned
-    if (req.cookies.username) {
-        const user = await getUserByUsername(req.cookies.username);
-        if (user) {
-            // Check IP ban
-            const clientIP = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
-            const ipHash = hashIP(clientIP);
-            const settings = await getSettings();
-            if (settings.bannedIPs.includes(ipHash)) {
-                res.clearCookie('username');
-                res.clearCookie('token');
-                return res.send('Your IP address has been permanently banned.');
-            }
-            
-            // Check user ban
-            if (await isBanned(user)) {
-                // Allow access to logout only
-                if (req.path === '/logout') {
-                    return next();
-                }
-                
-                if (user.role === ROLES.TEMP_BANNED && user.banExpires) {
-                    const timeLeft = Math.ceil((user.banExpires - Date.now()) / (1000 * 60 * 60));
-                    return res.send(`You are temporarily banned. Time remaining: ${timeLeft} hours. Reason: ${user.banReason || 'No reason provided'}`);
-                }
-                else {
-                    return res.send(`You are permanently banned. Reason: ${user.banReason || 'No reason provided'}`);
-                }
-            }
-        }
-    }
-    next();
-});
-// Serve private Mii images with authentication
-site.use('/privateMiiImgs', async (req, res, next) => {
-    const miiId = req.path.split('/').pop().split('.')[0];
-    
-    const privateMii = await Mii.findOne({ id: miiId, private: true }).lean();
-    if (privateMii) {
-        const user = await getUserByUsername(req.cookies.username);
-        const isModerator = user && canModerate(user);
-        const isOwner = privateMii.uploader === req.cookies.username;
-        
-        if (isOwner || isModerator) {
-            next();
-        } else {
-            res.status(403).send('Access denied');
-        }
-    } else {
-        next();
-    }
-});
-site.use('/privateMiiQRs', async (req, res, next) => {
-    const miiId = req.path.split('/').pop().split('.')[0];
-    
-    const privateMii = await Mii.findOne({ id: miiId, private: true }).lean();
-    if (privateMii) {
-        const user = await getUserByUsername(req.cookies.username);
-        const isModerator = user && canModerate(user);
-        const isOwner = privateMii.uploader === req.cookies.username;
-        
-        if (isOwner || isModerator) {
-            next();
-        } else {
-            res.status(403).send('Access denied');
-        }
-    } else {
-        next();
-    }
-});
-// Static assets caching
-site.use('/static', express.static(path.join(__dirname, 'static'), {
-    maxAge: '7d',
-    etag: true
-}));
-site.use(compression({
-    level: 6,
-    threshold: 100 * 1024, // Only compress if response > 100kb
-    filter: (req, res) => {
-        if (req.headers['x-no-compression']) {
-            return false;
-        }
-        return compression.filter(req, res);
-    }
-}));
+
+//#region Middleware
+
+// Security middleware
+site.use(helmet({ contentSecurityPolicy: false }));
 site.use((req, res, next) => {
     // Security headers
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -887,8 +839,154 @@ site.use((req, res, next) => {
     next();
 });
 
+// Auth middleware
+site.use(async (req, res, next) => {
+    // Set req.user if logged in
+    const user = await getUserByUsername(req.cookies.username);
+    if (user) {
+        if (!validatePassword(req.cookies.token, user.salt, user.token)) {
+            // Clear invalid info
+            res.clearCookie('username');
+            res.clearCookie('token');
+            res.redirect("/");
+            return;
+        }
+        else {
+            // Set DB user
+            req.user = await Users.findOne({ username: user.username });
+            next();
+        }
+        return;
+    }
+    else {
+        // Not logged in, can proceed. Authed endpoints check req.user exists
+        next();
+    }
+});
+
+// Ban middleware
+site.use(async (req, res, next) => {
+    // Check if user is banned
+    if (req.user) {
+        if (req.user) {
+            // Check IP ban
+            const clientIP = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+            const ipHash = hashIP(clientIP);
+            const settings = await getSettings();
+            if (settings.bannedIPs.includes(ipHash)) {
+                res.clearCookie('username');
+                res.clearCookie('token');
+                return res.send('Your IP address has been permanently banned.');
+            }
+            
+            // Check user ban
+            if (await isBanned(req.user)) {
+                // Allow access to logout only
+                if (req.path === '/logout') {
+                    return next();
+                }
+                
+                if (req.user.role === ROLES.TEMP_BANNED && req.user.banExpires) {
+                    const timeLeft = Math.ceil((req.user.banExpires - Date.now()) / (1000 * 60 * 60));
+                    return res.send(`You are temporarily banned. Time remaining: ${timeLeft} hours. Reason: ${req.user.banReason || 'No reason provided'}`);
+                }
+                else {
+                    return res.send(`You are permanently banned. Reason: ${req.user.banReason || 'No reason provided'}`);
+                }
+            }
+        }
+    }
+    next();
+});
+
+// Compression middleware
+site.use(compression({
+    level: 6,
+    threshold: 100 * 1024, // Only compress if response > 100kb
+    filter: (req, res) => {
+        if (req.headers['x-no-compression']) {
+            return false;
+        }
+        return compression.filter(req, res);
+    }
+}));
+
+//#endregion
+
+
+//#region Static handling
+
+// Serve private Mii images with authentication
+site.use('/privateMiiImgs', async (req, res, next) => {
+    const miiId = req.path.split('/').pop().split('.')[0];
+    
+    const privateMii = await Miis.findOne({ id: miiId, private: true }).lean();
+    if (privateMii) {
+        const isOwner = privateMii.uploader === req.user.username;
+        const isModerator = req.user && canModerate(req.user);
+        
+        if (isModerator || isOwner) {
+            next();
+        } else {
+            res.status(403).send('Access denied');
+        }
+    } else {
+        next();
+    }
+});
+
+site.use('/privateMiiQRs', async (req, res, next) => {
+    const miiId = req.path.split('/').pop().split('.')[0];
+    
+    const privateMii = await Miis.findOne({ id: miiId, private: true }).lean();
+    if (privateMii) {
+        const isOwner = privateMii.uploader === req.user.username;
+        const isModerator = req.user && canModerate(req.user);
+        
+        if (isOwner || isModerator) {
+            next();
+        } else {
+            res.status(403).send('Access denied');
+        }
+    } else {
+        next();
+    }
+});
+
+// Static assets caching
+site.use('/static', express.static(path.join(__dirname, 'static'), {
+    maxAge: '7d',
+    etag: true
+}));
+
+//#endregion
+
+function requireAuth(req, res, next) {
+    if (!req.user) {
+        return res.status(401).send('Authentication required');
+    }
+    next();
+}
+function requireRole(roles) {
+    // Returns middleware when called
+    if (!Array.isArray(roles)) {
+        roles = [ roles  ];
+    }
+    return (req, res, next) => {
+        if (!req.user) {
+            return res.status(401).send('Authentication required');
+        }
+        const userRoles = getUserRoles(req.user);
+        const hasRequiredRole = roles.some(role => userRoles.includes(role));
+        if (!hasRequiredRole && !userRoles.includes(ROLES.ADMINISTRATOR)) {
+            return res.status(403).send('Insufficient permissions');
+        }
+        next();
+    }
+}
+
 connectionPromise.then(() => { // TODO: server error page if DB fails
-    site.listen(8080, async () => {
+    site.listen(process.env.PORT || 8080, async () => {
         console.log("Starting, do not stop...");
 
         // Ensure directories exist
@@ -941,10 +1039,10 @@ connectionPromise.then(() => { // TODO: server error page if DB fails
                     mii.private = false;
                     mii.published = true;
 
-                    await Mii.create(mii);
+                    await Miis.create(mii);
 
                     // Add to user's submissions
-                    await User.findOneAndUpdate(
+                    await Users.findOneAndUpdate(
                         { username: mii.uploader },
                         { $push: { submissions: mii.id } },
                         { upsert: true }
@@ -976,7 +1074,7 @@ connectionPromise.then(() => { // TODO: server error page if DB fails
         console.log("Ensured QRs Are Readable For All Miis");
 
         // Make sure QRs and Thumbnails exist
-        const allMiis = await Mii.find({}).lean();
+        const allMiis = await Miis.find({}).lean();
         await Promise.all(
             allMiis.map(async (mii) => {
                 const imgPath = mii.private ? `./static/privateMiiImgs/${mii.id}.png` : `./static/miiImgs/${mii.id}.png`;
@@ -996,10 +1094,13 @@ connectionPromise.then(() => { // TODO: server error page if DB fails
         console.log(`Ensured All Miis Have QRs And Face Renders\nGenerating new average Mii...`);
         await getAverageMii();
         setInterval(async () => await getAverageMii(), 1800000);//30 Mins
+
+        // TODO: it's passing it without all the fields
         const avgMii = await getMiiById("average");
+
         if (avgMii) {
-            fs.writeFileSync(`./static/miiImgs/average.png`, await miijs.renderMii(avgMii));
-            await miijs.write3DSQR(avgMii, `./static/miiQRs/average.png`);
+            fs.promises.writeFile(`./static/miiImgs/average.png`, await miijs.renderMii(avgMii)).catch(() => console.log);
+            await miijs.write3DSQR(avgMii, `./static/miiQRs/average.png`).catch(() => console.log);
         }
         console.log(`All setup finished.\nOnline`);
     });
@@ -1081,7 +1182,7 @@ site.get('/official', async (req, res) => {
     let toSend = await getSendables(req);
     
     // Get all official Miis from DB
-    let officialMiis = await Mii.find({ official: true, private: false }).lean();
+    let officialMiis = await Miis.find({ official: true, private: false }).lean();
     
     // Get settings for categories
     const settings = await getSettings();
@@ -1177,8 +1278,8 @@ site.get('/upload', async (req, res) => {
                 
                 toSend.fromAmiibo = {
                     id: tempMiiId,
-                    name: mii.meta?.name || "Unknown",
-                    creator: mii.meta?.creatorName || "Unknown"
+                    name: mii.meta.name || "Unknown",
+                    creator: mii.meta.creatorName || "Unknown"
                 };
             } catch (e) {
                 console.error('Error reading temp Amiibo Mii:', e);
@@ -1203,7 +1304,7 @@ site.get('/api', async (req, res) => {
         res.send(`{"okay":false,"error":"Invalid arguments"}`);
     }
 });
-site.get('/verify', async (req, res) => {
+site.get('/verify', async (req, res) => { // TODO: verify auth middleware did not break
     try {
         const user = await getUserByUsername(req.query.user);
         if (!user) {
@@ -1214,7 +1315,7 @@ site.get('/verify', async (req, res) => {
         if (validatePassword(req.query.token, user.salt, user.verificationToken)) {
             let token = genToken();
             
-            await User.findOneAndUpdate(
+            await Users.findOneAndUpdate(
                 { username: req.query.user },
                 { 
                     $unset: { verificationToken: "" },
@@ -1241,17 +1342,17 @@ site.get('/verify', async (req, res) => {
 });
 site.get('/deleteMii', async (req, res) => {
     try {
-        const user = await getUserByUsername(req.cookies.username);
-        if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
+        if (!req.user) {
             res.send("{'okay':false}");
             return;
         }
         
-        const isModerator = canModerate(user);
+        const isModerator = canModerate(req.user);
         const miiId = req.query.id;
         
         // Try to find the Mii (could be public or private)
         const mii = await getMiiById(miiId, true);
+        const uploader = await getUserByUsername(mii.uploader);
         
         if (!mii) {
             res.send("{'okay':false, 'error':'Mii not found'}");
@@ -1259,8 +1360,8 @@ site.get('/deleteMii', async (req, res) => {
         }
         
         // Check permissions
-        const canDelete = user.submissions.includes(miiId) || 
-                         (user.privateMiis && user.privateMiis.includes(miiId)) || 
+        const canDelete = req.user.submissions.includes(miiId) || 
+                         (req.user.privateMiis && req.user.privateMiis.includes(miiId)) || 
                          isModerator;
         
         if (!canDelete) {
@@ -1294,7 +1395,7 @@ site.get('/deleteMii', async (req, res) => {
                 "fields": [
                     {
                         "name": `Mii Name`,
-                        "value": mii.name || mii.meta?.name,
+                        "value": mii.meta?.name,
                         "inline": true
                     },
                     {
@@ -1304,7 +1405,7 @@ site.get('/deleteMii', async (req, res) => {
                     },
                     {
                         "name": `Mii Creator Name (embedded in Mii file)`,
-                        "value": mii.creatorName || mii.meta?.creatorName,
+                        "value": mii.meta.creatorName,
                         "inline": true
                     }
                 ],
@@ -1320,7 +1421,7 @@ site.get('/deleteMii', async (req, res) => {
         }), attachments);
         
         // Remove from user's submissions/privateMiis
-        await User.findOneAndUpdate(
+        await Users.findOneAndUpdate(
             { username: mii.uploader },
             { 
                 $pull: { 
@@ -1331,13 +1432,15 @@ site.get('/deleteMii', async (req, res) => {
         );
         
         // Delete from database
-        await Mii.findOneAndDelete({ id: miiId });
+        await Miis.findOneAndDelete({ id: miiId });
         
         // Delete files
         try { fs.unlinkSync(imgPath); } catch(e) {}
         try { fs.unlinkSync(qrPath); } catch(e) {}
         
         res.send("{'okay':true}");
+        
+        if(mii.uploader!==uploader.username) sendEmail(uploader.email,`Mii Deleted - InfiniMii`,`Hi ${mii.uploader}, one of your Miis "${mii.meta.name}" has been deleted by a Moderator. You can reply to this email to receive support.`);
     }
     catch (e) {
         console.error('Delete Mii error:', e);
@@ -1345,22 +1448,8 @@ site.get('/deleteMii', async (req, res) => {
     }
 });
 // Update Mii Field (Moderator only)
-site.post('/updateMiiField', async (req, res) => {
+site.post('/updateMiiField', requireAuth, requireRole(ROLES.MODERATOR), async (req, res) => {
     try {
-        // Verify moderator
-        if (!req.cookies.username || !req.cookies.token) {
-            return res.json({ okay: false, error: 'Not authenticated' });
-        }
-
-        const user = await getUserByUsername(req.cookies.username);
-        if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
-            return res.json({ okay: false, error: 'Invalid token' });
-        }
-
-        if (!user.roles.includes('moderator')) {
-            return res.json({ okay: false, error: 'Not authorized' });
-        }
-
         const { id, field, value } = req.body;
 
         if (!id || !field || value === undefined) {
@@ -1400,13 +1489,13 @@ site.post('/updateMiiField', async (req, res) => {
                 oldValue = mii.uploader;
                 
                 // Remove from old uploader's submissions
-                await User.findOneAndUpdate(
+                await Users.findOneAndUpdate(
                     { username: mii.uploader },
                     { $pull: { submissions: id } }
                 );
                 
                 // Add to new uploader's submissions
-                await User.findOneAndUpdate(
+                await Users.findOneAndUpdate(
                     { username: value },
                     { $addToSet: { submissions: id } }
                 );
@@ -1417,7 +1506,7 @@ site.post('/updateMiiField', async (req, res) => {
                 return res.json({ okay: false, error: 'Invalid field' });
         }
 
-        await Mii.findOneAndUpdate({ id }, { $set: updates });
+        await Miis.findOneAndUpdate({ id }, { $set: updates });
 
         // Log to Discord
         makeReport(JSON.stringify({
@@ -1461,22 +1550,8 @@ site.post('/updateMiiField', async (req, res) => {
     }
 });
 // Regenerate QR Code (Moderator only)
-site.get('/regenerateQR', async (req, res) => {
+site.get('/regenerateQR', requireAuth, requireRole(ROLES.MODERATOR), async (req, res) => {
     try {
-        // Verify moderator
-        if (!req.cookies.username || !req.cookies.token) {
-            return res.json({ okay: false, error: 'Not authenticated' });
-        }
-
-        const user = await getUserByUsername(req.cookies.username);
-        if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
-            return res.json({ okay: false, error: 'Invalid token' });
-        }
-
-        if (!user.roles.includes('moderator')) {
-            return res.json({ okay: false, error: 'Not authorized' });
-        }
-
         const { id } = req.query;
         const mii = await getMiiById(id);
 
@@ -1514,21 +1589,8 @@ site.get('/regenerateQR', async (req, res) => {
     }
 });
 // Add Role to User (Admin only)
-site.post('/addUserRole', async (req, res) => {
+site.post('/addUserRole', requireAuth, requireRole(ROLES.ADMINISTRATOR), async (req, res) => {
     try {
-        if (!req.cookies.username || !req.cookies.token) {
-            return res.json({ okay: false, error: 'Not authenticated' });
-        }
-
-        const currentUser = await getUserByUsername(req.cookies.username);
-        if (!currentUser || !validatePassword(req.cookies.token, currentUser.salt, currentUser.token)) {
-            return res.json({ okay: false, error: 'Invalid token' });
-        }
-
-        if (!isAdmin(currentUser)) {
-            return res.json({ okay: false, error: 'Only administrators can manage roles' });
-        }
-
         const { username, role } = req.body;
         const targetUser = await getUserByUsername(username);
 
@@ -1541,7 +1603,7 @@ site.post('/addUserRole', async (req, res) => {
         }
 
         addRole(targetUser, role);
-        await User.findOneAndUpdate({ username }, { roles: targetUser.roles });
+        await Users.findOneAndUpdate({ username }, { roles: targetUser.roles });
 
         makeReport(JSON.stringify({
             embeds: [{
@@ -1580,21 +1642,8 @@ site.post('/addUserRole', async (req, res) => {
 });
 
 // Remove Role from User (Admin only)
-site.post('/removeUserRole', async (req, res) => {
+site.post('/removeUserRole', requireAuth, requireRole(ROLES.ADMINISTRATOR), async (req, res) => {
     try {
-        if (!req.cookies.username || !req.cookies.token) {
-            return res.json({ okay: false, error: 'Not authenticated' });
-        }
-
-        const currentUser = await getUserByUsername(req.cookies.username);
-        if (!currentUser || !validatePassword(req.cookies.token, currentUser.salt, currentUser.token)) {
-            return res.json({ okay: false, error: 'Invalid token' });
-        }
-
-        if (!isAdmin(currentUser)) {
-            return res.json({ okay: false, error: 'Only administrators can manage roles' });
-        }
-
         const { username, role } = req.body;
         const targetUser = await getUserByUsername(username);
 
@@ -1603,7 +1652,7 @@ site.post('/removeUserRole', async (req, res) => {
         }
 
         removeRole(targetUser, role);
-        await User.findOneAndUpdate({ username }, { roles: targetUser.roles });
+        await Users.findOneAndUpdate({ username }, { roles: targetUser.roles });
 
         makeReport(JSON.stringify({
             embeds: [{
@@ -1639,21 +1688,8 @@ site.post('/removeUserRole', async (req, res) => {
 });
 
 // Temporary Ban User (Moderator+)
-site.post('/tempBanUser', async (req, res) => {
+site.post('/tempBanUser', requireAuth, requireRole(ROLES.MODERATOR), async (req, res) => {
     try {
-        if (!req.cookies.username || !req.cookies.token) {
-            return res.json({ okay: false, error: 'Not authenticated' });
-        }
-
-        const currentUser = await getUserByUsername(req.cookies.username);
-        if (!currentUser || !validatePassword(req.cookies.token, currentUser.salt, currentUser.token)) {
-            return res.json({ okay: false, error: 'Invalid token' });
-        }
-
-        if (!canModerate(currentUser)) {
-            return res.json({ okay: false, error: 'Insufficient permissions' });
-        }
-
         const { username, hours, reason } = req.body;
         const targetUser = await getUserByUsername(username);
 
@@ -1662,14 +1698,14 @@ site.post('/tempBanUser', async (req, res) => {
         }
 
         // Moderators can't ban admins or other moderators
-        if (!isAdmin(currentUser) && canModerate(targetUser)) {
+        if (!isAdmin(req.user) && canModerate(targetUser)) {
             return res.json({ okay: false, error: 'Cannot ban moderators or administrators' });
         }
 
         addRole(targetUser, ROLES.TEMP_BANNED);
         const banExpires = Date.now() + (hours * 60 * 60 * 1000);
         
-        await User.findOneAndUpdate(
+        await Users.findOneAndUpdate(
             { username },
             {
                 $set: {
@@ -1715,21 +1751,8 @@ site.post('/tempBanUser', async (req, res) => {
 });
 
 // Permanent Ban User (Admin only)
-site.post('/permBanUser', async (req, res) => {
+site.post('/permBanUser', requireAuth, requireRole(ROLES.ADMINISTRATOR), async (req, res) => {
     try {
-        if (!req.cookies.username || !req.cookies.token) {
-            return res.json({ okay: false, error: 'Not authenticated' });
-        }
-
-        const currentUser = await getUserByUsername(req.cookies.username);
-        if (!currentUser || !validatePassword(req.cookies.token, currentUser.salt, currentUser.token)) {
-            return res.json({ okay: false, error: 'Invalid token' });
-        }
-
-        if (!isAdmin(currentUser)) {
-            return res.json({ okay: false, error: 'Only administrators can permanently ban users' });
-        }
-
         const { username, reason } = req.body;
         const targetUser = await getUserByUsername(username);
 
@@ -1759,7 +1782,7 @@ site.post('/permBanUser', async (req, res) => {
                     try { fs.unlinkSync(`./static/miiQRs/${miiId}.png`); } catch(e) {}
                     
                     // Delete Mii from DB
-                    await Mii.findOneAndDelete({ id: miiId });
+                    await Miis.findOneAndDelete({ id: miiId });
                 }
             } catch(e) {
                 console.error(`Error deleting Mii ${miiId}:`, e);
@@ -1767,7 +1790,7 @@ site.post('/permBanUser', async (req, res) => {
         }
 
         // Delete user account
-        await User.findOneAndDelete({ username });
+        await Users.findOneAndDelete({ username });
 
         makeReport(JSON.stringify({
             embeds: [{
@@ -1809,21 +1832,8 @@ site.post('/permBanUser', async (req, res) => {
 });
 
 // Delete All User Miis (Moderator+)
-site.post('/deleteAllUserMiis', async (req, res) => {
+site.post('/deleteAllUserMiis', requireAuth, requireRole(ROLES.MODERATOR), async (req, res) => {
     try {
-        if (!req.cookies.username || !req.cookies.token) {
-            return res.json({ okay: false, error: 'Not authenticated' });
-        }
-
-        const currentUser = await getUserByUsername(req.cookies.username);
-        if (!currentUser || !validatePassword(req.cookies.token, currentUser.salt, currentUser.token)) {
-            return res.json({ okay: false, error: 'Invalid token' });
-        }
-
-        if (!canModerate(currentUser)) {
-            return res.json({ okay: false, error: 'Insufficient permissions' });
-        }
-
         const { username } = req.body;
         const targetUser = await getUserByUsername(username);
 
@@ -1843,7 +1853,7 @@ site.post('/deleteAllUserMiis', async (req, res) => {
                     try { fs.unlinkSync(`./static/miiQRs/${miiId}.png`); } catch(e) {}
                     
                     // Delete Mii from DB
-                    await Mii.findOneAndDelete({ id: miiId });
+                    await Miis.findOneAndDelete({ id: miiId });
                     deletedCount++;
                 }
             } catch(e) {
@@ -1852,7 +1862,7 @@ site.post('/deleteAllUserMiis', async (req, res) => {
         }
 
         // Clear user's submissions array
-        await User.findOneAndUpdate({ username }, { $set: { submissions: [] } });
+        await Users.findOneAndUpdate({ username }, { $set: { submissions: [] } });
 
         makeReport(JSON.stringify({
             embeds: [{
@@ -1884,21 +1894,8 @@ site.post('/deleteAllUserMiis', async (req, res) => {
 });
 
 // Change Username (Moderator+)
-site.post('/changeUsername', async (req, res) => {
+site.post('/changeUsername', requireAuth, requireRole(ROLES.MODERATOR), async (req, res) => {
     try {
-        if (!req.cookies.username || !req.cookies.token) {
-            return res.json({ okay: false, error: 'Not authenticated' });
-        }
-
-        const currentUser = await getUserByUsername(req.cookies.username);
-        if (!currentUser || !validatePassword(req.cookies.token, currentUser.salt, currentUser.token)) {
-            return res.json({ okay: false, error: 'Invalid token' });
-        }
-
-        if (!canModerate(currentUser)) {
-            return res.json({ okay: false, error: 'Insufficient permissions' });
-        }
-
         const { oldUsername, newUsername } = req.body;
 
         if (!validate(newUsername)) {
@@ -1916,13 +1913,13 @@ site.post('/changeUsername', async (req, res) => {
         }
 
         // Update username in User document
-        await User.findOneAndUpdate(
+        await Users.findOneAndUpdate(
             { username: oldUsername },
             { $set: { username: newUsername } }
         );
 
         // Update uploader field in all user's Miis
-        await Mii.updateMany(
+        await Miis.updateMany(
             { uploader: oldUsername },
             { $set: { uploader: newUsername } }
         );
@@ -1957,21 +1954,8 @@ site.post('/changeUsername', async (req, res) => {
 });
 
 // Toggle Mii Official Status (Moderator+)
-site.post('/toggleMiiOfficial', async (req, res) => {
+site.post('/toggleMiiOfficial', requireAuth, requireRole(ROLES.MODERATOR), async (req, res) => {
     try {
-        // Verify moderator
-        if (!req.cookies.username || !req.cookies.token) {
-            return res.json({ okay: false, error: 'Not authenticated' });
-        }
-
-        const currentUser = await getUserByUsername(req.cookies.username);
-        if (!currentUser || !validatePassword(req.cookies.token, currentUser.salt, currentUser.token)) {
-            return res.json({ okay: false, error: 'Invalid token' });
-        }
-        if (!canModerate(currentUser)) {
-            return res.json({ okay: false, error: 'Not authorized' });
-        }
-
         const { id, official } = req.body;
 
         if (!id || official === undefined) {
@@ -1985,7 +1969,7 @@ site.post('/toggleMiiOfficial', async (req, res) => {
 
         const oldStatus = mii.official;
         
-        await Mii.findOneAndUpdate(
+        await Miis.findOneAndUpdate(
             { id },
             { official }
         );
@@ -2196,7 +2180,7 @@ site.post('/extractMiiFromAmiibo', upload.single('amiibo'), async (req, res) => 
         const mii = await miijs.read3DSQR(miiData);
         
         // Generate ID and save temporarily
-        const tempId = genId();
+        const tempId = await genId();
         mii.id = tempId;
         mii.uploadedOn = Date.now();
         mii.uploader = "temp_" + tempId;
@@ -2267,7 +2251,7 @@ site.post('/insertMiiIntoAmiibo', upload.fields([
             
             // Get decrypted binary data (92 bytes)
             // We need to convert the Mii back to binary format
-            const tempQrPath = "./static/temp/" + genId() + ".png";
+            const tempQrPath = "./static/temp/" + await genId() + ".png";
             await miijs.write3DSQR(mii, tempQrPath);
             miiData = await miijs.read3DSQR(tempQrPath, true);
             try { fs.unlinkSync(tempQrPath); } catch (e) { }
@@ -2291,7 +2275,7 @@ site.post('/insertMiiIntoAmiibo', upload.fields([
             
             // Check private Miis
             if (!mii) {
-                const privateMii = await Mii.findOne({ id: miiId, private: true });
+                const privateMii = await Miis.findOne({ id: miiId, private: true });
                 if (privateMii) {
                     const user = await getUserByUsername(req.cookies.username);
                     const isModerator = user && canModerate(user);
@@ -2319,7 +2303,7 @@ site.post('/insertMiiIntoAmiibo', upload.fields([
             }
             
             // Generate temporary QR and extract binary
-            const tempPath = `./static/temp/${genId()}.png`;
+            const tempPath = `./static/temp/${await genId()}.png`;
             try {
                 await miijs.write3DSQR(mii, tempPath);
                 miiData = await miijs.read3DSQR(tempPath, true);
@@ -2345,7 +2329,7 @@ site.post('/insertMiiIntoAmiibo', upload.fields([
             const mii = miijs.convertStudioToMii(studioCode);
             
             // Write temporary QR and extract binary
-            const tempPath = "./static/temp/" + genId() + ".png";
+            const tempPath = "./static/temp/" + await genId() + ".png";
             await miijs.write3DSQR(mii, tempPath);
             miiData = await miijs.read3DSQR(tempPath, true);
             try { fs.unlinkSync(tempPath); } catch (e) { }
@@ -2395,11 +2379,8 @@ site.post('/insertMiiIntoAmiibo', upload.fields([
 // Upload extracted Amiibo Mii
 site.post('/uploadExtractedAmiibo', async (req, res) => {
     try {
-        const username = req.cookies.username;
-        
         // Check authentication
-        const user = await getUserByUsername(username);
-        if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
+        if (!req.user) {
             res.send("{'error':'Please log in to upload Miis'}");
             return;
         }
@@ -2422,7 +2403,7 @@ site.post('/uploadExtractedAmiibo', async (req, res) => {
         }
         
         // Generate new ID for the actual upload
-        const newMiiId = genId();
+        const newMiiId = await genId();
         
         // Move files from temp location to private folders
         fs.renameSync(tempImgPath, `./static/privateMiiImgs/${newMiiId}.png`);
@@ -2432,7 +2413,7 @@ site.post('/uploadExtractedAmiibo', async (req, res) => {
         const mii = await miijs.read3DSQR(`./static/privateMiiQRs/${newMiiId}.png`);
         mii.id = newMiiId;
         mii.uploadedOn = Date.now();
-        mii.uploader = username;
+        mii.uploader = req.user.username;
         mii.desc = "Extracted from Amiibo";
         mii.votes = 1;
         mii.official = false;
@@ -2440,15 +2421,15 @@ site.post('/uploadExtractedAmiibo', async (req, res) => {
         mii.blockedFromPublishing = false;
         
         // Add to user's private Miis
-        await User.findOneAndUpdate(
-            { username },
+        await Users.findOneAndUpdate(
+            { username: req.user.username },
             { $push: { privateMiis: newMiiId } }
         );
         
         // Store in database as private Mii
-        await Mii.create({
+        await Miis.create({
             ...mii,
-            _id: newMiiId,
+            id: newMiiId,
             private: true
         });
         
@@ -2466,7 +2447,7 @@ site.post('/uploadExtractedAmiibo', async (req, res) => {
                 "fields": [
                     {
                         "name": `Mii Name`,
-                        "value": mii.meta?.name || mii.name || "Unknown",
+                        "value": mii.meta?.name || "Unknown",
                         "inline": true
                     },
                     {
@@ -2476,7 +2457,7 @@ site.post('/uploadExtractedAmiibo', async (req, res) => {
                     },
                     {
                         "name": `Mii Creator Name`,
-                        "value": mii.meta?.creatorName || mii.creatorName || "Unknown",
+                        "value": mii.meta?.creatorName || "Unknown",
                         "inline": true
                     }
                 ],
@@ -2506,24 +2487,19 @@ site.post('/uploadExtractedAmiibo', async (req, res) => {
 // ========== STUDIO ENDPOINTS ==========
 
 // Upload Mii from Studio code
-site.post('/uploadStudioMii', async (req, res) => {
+site.post('/uploadStudioMii', requireAuth, async (req, res) => {
     try {
-        let uploader = req.cookies.username;
-        const user = await getUserByUsername(uploader);
-        if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
-            res.send("{'okay':false, 'error':'Invalid credentials'}");
-            return;
-        }
+        let uploader = req.user.username;
         
         // Check private Mii limit
-        if (!user.privateMiis) user.privateMiis = [];
-        if (user.privateMiis.length >= PRIVATE_MII_LIMIT) {
+        if (!req.user.privateMiis) user.privateMiis = [];
+        if (req.user.privateMiis.length >= Number(PRIVATE_MII_LIMIT)) {
             res.send(`{'okay':false,'error':'You have reached the limit of ${PRIVATE_MII_LIMIT} private Miis. Please publish or delete some before uploading more.'}`);
             return;
         }
         
         // Check if trying to upload official Mii without permission
-        if (req.body.official && !canUploadOfficial(user)) {
+        if (req.body.official && !canUploadOfficial(req.user)) {
             res.send("{'error':'Only Researchers and Administrators can upload official Miis'}");
             return;
         }
@@ -2547,7 +2523,7 @@ site.post('/uploadStudioMii', async (req, res) => {
         // Convert Studio to 3DS Mii
         const mii = miijs.convertStudioToMii(studioCode);
         
-        mii.id = genId();
+        mii.id = await genId();
         mii.uploadedOn = Date.now();
         mii.uploader = req.body.official ? "Nintendo" : uploader;
         mii.desc = req.body.desc || "";
@@ -2573,15 +2549,15 @@ site.post('/uploadStudioMii', async (req, res) => {
         await miijs.write3DSQR(mii, "./static/privateMiiQRs/" + mii.id + ".png");
         
         // Add to user's private Miis
-        await User.findOneAndUpdate(
+        await Users.findOneAndUpdate(
             { username: uploader },
             { $push: { privateMiis: mii.id } }
         );
         
         // Store in database as private Mii
-        await Mii.create({
+        await Miis.create({
             ...mii,
-            _id: mii.id,
+            id: mii.id,
             private: true
         });
         
@@ -2596,7 +2572,7 @@ site.post('/uploadStudioMii', async (req, res) => {
                 "fields": [
                     {
                         "name": `Mii Name`,
-                        "value": mii.meta?.name || mii.name || "Unknown",
+                        "value": mii.meta?.name || "Unknown",
                         "inline": true
                     },
                     {
@@ -2606,7 +2582,7 @@ site.post('/uploadStudioMii', async (req, res) => {
                     },
                     {
                         "name": `Mii Creator Name`,
-                        "value": mii.meta?.creatorName || mii.creatorName || "Unknown",
+                        "value": mii.meta?.creatorName || "Unknown",
                         "inline": true
                     }
                 ],
@@ -2671,7 +2647,7 @@ site.get('/downloadMii', async (req, res) => {
             // Read QR and extract the encrypted portion
             // This requires reading the QR image and extracting the data payload
             // For now, we'll create a new encrypted QR and extract from it
-            const tempQR = "./static/temp/" + genId() + ".png";
+            const tempQR = "./static/temp/" + await genId() + ".png";
             await miijs.write3DSQR(mii, tempQR);
             
             // Read the encrypted data from the QR
@@ -2739,21 +2715,8 @@ site.get('/getStudioCode', async (req, res) => {
 });
 
 // Change User PFP (Moderator+)
-site.post('/changeUserPfp', async (req, res) => {
+site.post('/changeUserPfp', requireAuth, requireRole(ROLES.MODERATOR), async (req, res) => {
     try {
-        if (!req.cookies.username || !req.cookies.token) {
-            return res.json({ okay: false, error: 'Not authenticated' });
-        }
-
-        const currentUser = await getUserByUsername(req.cookies.username);
-        if (!currentUser || !validatePassword(req.cookies.token, currentUser.salt, currentUser.token)) {
-            return res.json({ okay: false, error: 'Invalid token' });
-        }
-
-        if (!canModerate(currentUser)) {
-            return res.json({ okay: false, error: 'Insufficient permissions' });
-        }
-
         const { username, miiId } = req.body;
         const targetUser = await getUserByUsername(username);
 
@@ -2766,7 +2729,7 @@ site.post('/changeUserPfp', async (req, res) => {
             return res.json({ okay: false, error: 'Mii not found' });
         }
 
-        await User.findOneAndUpdate(
+        await Users.findOneAndUpdate(
             { username },
             { miiPfp: miiId }
         );
@@ -2801,28 +2764,23 @@ site.post('/changeUserPfp', async (req, res) => {
         res.json({ okay: false, error: 'Server error' });
     }
 });
-site.post('/voteMii', async (req, res) => {
+site.post('/voteMii', requireAuth, async (req, res) => {
     if (!req.query.id) {
         res.send("{'error':'No ID specified'}");
         return;
     }
     try {
-        const user = await getUserByUsername(req.cookies.username);
-        if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
-            res.send("{'error':'Invalid token'}");
-            return;
-        }
-        if (user.submissions.includes(req.query.id)) {
+        if (req.user.submissions.includes(req.query.id)) {
             res.send("{'error':'You submitted this Mii'}");
             return;
         }
-        if (user.votedFor.includes(req.query.id)) {
+        if (req.user.votedFor.includes(req.query.id)) {
             // Unlike
-            await User.findOneAndUpdate(
+            await Users.findOneAndUpdate(
                 { username: req.cookies.username },
                 { $pull: { votedFor: req.query.id } }
             );
-            await Mii.findOneAndUpdate(
+            await Miis.findOneAndUpdate(
                 { id: req.query.id },
                 { $inc: { votes: -1 } }
             );
@@ -2830,11 +2788,11 @@ site.post('/voteMii', async (req, res) => {
             return;
         }
         // Like
-        await User.findOneAndUpdate(
+        await Users.findOneAndUpdate(
             { username: req.cookies.username },
             { $addToSet: { votedFor: req.query.id } }
         );
-        await Mii.findOneAndUpdate(
+        await Miis.findOneAndUpdate(
             { id: req.query.id },
             { $inc: { votes: 1 } }
         );
@@ -2875,6 +2833,10 @@ site.get('/mii/:id', async (req, res) => {
     inp.mii = mii;
     inp.height=miijs.miiHeightToFeetInches(inp.mii.general.height);
     inp.weight=miijs.miiWeightToRealWeight(inp.mii.general.height,inp.mii.general.weight);
+
+    // Override mii color for this page
+    inp.userPfpMiiColor = mii.general.favoriteColor;
+
     ejs.renderFile('./ejsFiles/miiPage.ejs', inp, {}, function(err, str) {
         if (err) {
             res.send(err);
@@ -2891,7 +2853,7 @@ site.get('/user/:username', async (req, res) => {
     if (!user) {
         return res.status(404).send('User not found');
     }
-    if (username === "Nintendo") {
+    if (username === "Nintendo") { // TODO: misspellings, capitalizations, etc.
         res.redirect('/official');
         return;
     }
@@ -2901,7 +2863,7 @@ site.get('/user/:username', async (req, res) => {
     inp.displayedMiis = [];
     
     // Get all user's submissions
-    const miis = await Mii.find({ id: { $in: user.submissions }, private: false }).lean();
+    const miis = await Miis.find({ id: { $in: user.submissions }, private: false }).lean();
     inp.displayedMiis = miis;
     
     ejs.renderFile('./ejsFiles/userPage.ejs', inp, {}, function(err, str) {
@@ -2959,18 +2921,8 @@ site.get('/signup', async (req, res) => {
 site.get('/login', async (req, res) => {
     res.sendFile(path.join(__dirname, "./static/login.html"));
 });
-site.get('/logout', async (req, res) => {
+site.get('/logout', requireAuth, async (req, res) => {
     try {
-        const user = await getUserByUsername(req.cookies.username);
-        if (user && validatePassword(req.cookies.token, user.salt, user.token)) {
-            await User.findOneAndUpdate(
-                { username: req.cookies.username },
-                { token: "" }
-            );
-        } else {
-            res.send("{'error':'Invalid token'}");
-            return;
-        }
         await res.clearCookie('username');
         await res.clearCookie('token');
         res.redirect("/");
@@ -3014,22 +2966,11 @@ site.get('/settings', async (req, res) => {
         res.send(str)
     });
 });
-site.get('/myPrivateMiis', async (req, res) => {
-    if (!req.cookies.username) {
-        res.redirect("/");
-        return;
-    }
+site.get('/myPrivateMiis', requireAuth, async (req, res) => {
+    var toSend = await getSendables(req, undefined, req.user);
     
-    const user = await getUserByUsername(req.cookies.username);
-    if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
-        res.redirect("/");
-        return;
-    }
-    
-    var toSend = await getSendables(req);
-    
-    const privateMiisArray = user.privateMiis || [];
-    const privateMiis = await Mii.find({ id: { $in: privateMiisArray }, private: true }).lean();
+    const privateMiisArray = req.user.privateMiis || [];
+    const privateMiis = await Miis.find({ id: { $in: privateMiisArray }, private: true }).lean();
     
     toSend.privateMiis = privateMiis;
     toSend.privateLimit = PRIVATE_MII_LIMIT;
@@ -3043,24 +2984,8 @@ site.get('/myPrivateMiis', async (req, res) => {
         res.send(str);
     });
 });
-site.get('/manageCategories', async (req, res) => {
-    if (!req.cookies.username) {
-        res.redirect("/");
-        return;
-    }
-    
-    const user = await getUserByUsername(req.cookies.username);
-    if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
-        res.redirect("/");
-        return;
-    }
-    
-    if (!canEditOfficial(user)) {
-        res.status(403).send("Access denied. Researcher role required.");
-        return;
-    }
-    
-    var toSend = await getSendables(req);
+site.get('/manageCategories', requireAuth, requireRole(ROLES.RESEARCHER), async (req, res) => {
+    var toSend = await getSendables(req, undefined, req.user);
     const settings = await getSettings();
     toSend.officialCategories = settings.officialCategories || {};
     
@@ -3073,16 +2998,11 @@ site.get('/manageCategories', async (req, res) => {
         res.send(str);
     });
 });
-site.get('/changePfp', async (req, res) => {
-    const user = await getUserByUsername(req.cookies.username);
-    if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
-        res.send(`{"okay":false,"msg":"Invalid account"}`);
-        return;
-    }
+site.get('/changePfp', requireAuth, async (req, res) => {
     if (req.query.id?.length > 0) {
         const mii = await getMiiById(req.query.id);
         if (mii) {
-            await User.findOneAndUpdate(
+            await Users.findOneAndUpdate(
                 { username: req.cookies.username },
                 { $set: { miiPfp: req.query.id } }
             );
@@ -3095,27 +3015,19 @@ site.get('/changePfp', async (req, res) => {
         res.send(`{"okay":false,"msg":"Invalid Mii ID"}`);
     }
 });
-site.get('/changeUser', async (req, res) => {
-    const oldUsername = req.cookies.username;
-    const user = await getUserByUsername(oldUsername);
-    
-    if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
-        res.send(`{"okay":false,"msg":"Invalid account"}`);
-        return;
-    }
-    
+site.get('/changeUser', requireAuth, async (req, res) => {    
     const newUsername = req.query.newUser;
     const existingUser = await getUserByUsername(newUsername);
     
     if (validate(newUsername) && !existingUser) {
         // Update all Miis uploaded by this user
-        await Mii.updateMany(
+        await Miis.updateMany(
             { uploader: oldUsername },
             { uploader: newUsername }
         );
         
         // Update username
-        await User.findOneAndUpdate(
+        await Users.findOneAndUpdate(
             { username: oldUsername },
             { username: newUsername }
         );
@@ -3146,13 +3058,7 @@ site.get('/changeUser', async (req, res) => {
         res.send(`{"okay":false,"msg":"Username invalid"}`);
     }
 });
-site.get('/changeHighlightedMii', async (req, res) => {
-    const user = await getUserByUsername(req.cookies.username);
-    if (!user || !validatePassword(req.cookies.token, user.salt, user.token) || !user.roles.includes('moderator')) {
-        res.send(`{"okay":false,"msg":"Invalid account"}`);
-        return;
-    }
-    
+site.get('/changeHighlightedMii', requireAuth, requireRole(ROLES.MODERATOR), async (req, res) => {    
     const miiId = req.query.id;
     if (miiId?.length > 0) {
         const mii = await getMiiById(miiId, false);
@@ -3194,7 +3100,7 @@ site.get('/changeHighlightedMii', async (req, res) => {
                 "fields": [
                     {
                         "name": `Mii Name`,
-                        "value": mii.name,
+                        "value": mii.meta.name,
                         "inline": true
                     },
                     {
@@ -3204,7 +3110,7 @@ site.get('/changeHighlightedMii', async (req, res) => {
                     },
                     {
                         "name": `Mii Creator Name (embedded in Mii file)`,
-                        "value": mii.creatorName,
+                        "value": mii.meta.creatorName,
                         "inline": true
                     }
                 ],
@@ -3235,7 +3141,7 @@ site.get('/reportMii', async (req,res)=>{
             "fields": [
                 {
                     "name": `Mii Name`,
-                    "value": mii.name,
+                    "value": mii.meta.name,
                     "inline": true
                 },
                 {
@@ -3250,7 +3156,7 @@ site.get('/reportMii', async (req,res)=>{
                 },
                 {
                     "name": `Mii Creator Name (embedded in Mii file)`,
-                    "value": mii.creatorName,
+                    "value": mii.meta.creatorName,
                     "inline": true
                 }
             ],
@@ -3299,21 +3205,12 @@ site.get('/cite', async (req, res) => {
     });
 });
 // Change Email (User)
-site.post('/changeEmail', async (req, res) => {
+site.post('/changeEmail', requireAuth, async (req, res) => {
     try {
-        if (!req.cookies.username || !req.cookies.token) {
-            return res.json({ okay: false, msg: 'Not authenticated' });
-        }
-
-        const user = await getUserByUsername(req.cookies.username);
-        if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
-            return res.json({ okay: false, msg: 'Invalid token' });
-        }
-
         const { oldEmail, newEmail } = req.body;
 
         // Verify old email matches
-        if (user.email !== oldEmail) {
+        if (req.user.email !== oldEmail) {
             return res.json({ okay: false, msg: 'Old email does not match' });
         }
 
@@ -3325,13 +3222,13 @@ site.post('/changeEmail', async (req, res) => {
         var token = genToken();
         let link = "https://infinimii.com/verify?user=" + encodeURIComponent(req.cookies.username) + "&token=" + encodeURIComponent(token);
         
-        await User.findOneAndUpdate(
+        await Users.findOneAndUpdate(
             { username: req.cookies.username },
             { 
                 $set: { 
                     email: newEmail,
                     verified: false,
-                    verificationToken: hashPassword(token, user.salt).hash
+                    verificationToken: hashPassword(token, req.user.salt).hash
                 }
             }
         ); // TODO_DB: this would brick your account if you send to a false email...
@@ -3364,32 +3261,23 @@ site.post('/changeEmail', async (req, res) => {
 });
 
 // Change Password (User)
-site.post('/changePassword', async (req, res) => {
+site.post('/changePassword', requireAuth, async (req, res) => {
     try {
-        if (!req.cookies.username || !req.cookies.token) {
-            return res.json({ okay: false, msg: 'Not authenticated' });
-        }
-
-        const user = await getUserByUsername(req.cookies.username);
-        if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
-            return res.json({ okay: false, msg: 'Invalid token' });
-        }
-
         const { oldPassword, newPassword } = req.body;
 
         // Verify old password
-        if (!validatePassword(oldPassword, user.salt, user.pass)) {
+        if (!validatePassword(oldPassword, req.user.salt, req.user.pass)) {
             return res.json({ okay: false, msg: 'Old password is incorrect' });
         }
 
         // Hash new password with existing salt
-        const newHashed = hashPassword(newPassword, user.salt);
+        const newHashed = hashPassword(newPassword, req.user.salt);
 
         // Generate new token and update cookie
         const newToken = genToken();
-        const newTokenHash = hashPassword(newToken, user.salt).hash;
+        const newTokenHash = hashPassword(newToken, req.user.salt).hash;
 
-        await User.findOneAndUpdate(
+        await Users.findOneAndUpdate(
             { username: req.cookies.username },
             { 
                 pass: newHashed.hash,
@@ -3415,7 +3303,7 @@ site.post('/changePassword', async (req, res) => {
                 ]
             }]
         }));
-        sendEmail(user.email,`Password Changed - InfiniMii`,`Hi ${req.cookies.username}, your password was recently changed on InfiniMii. If this was not you, you can reply to this email to receive support.`);
+        sendEmail(req.user.email,`Password Changed - InfiniMii`,`Hi ${req.cookies.username}, your password was recently changed on InfiniMii. If this was not you, you can reply to this email to receive support.`);
 
         res.json({ okay: true });
     } catch (e) {
@@ -3425,18 +3313,9 @@ site.post('/changePassword', async (req, res) => {
 });
 
 // Delete All User's Miis (User - own miis only)
-site.post('/deleteAllMyMiis', async (req, res) => { // TODO: verify no CSRF
+site.post('/deleteAllMyMiis', requireAuth, async (req, res) => { // TODO: verify no CSRF
     try {
-        if (!req.cookies.username || !req.cookies.token) {
-            return res.json({ okay: false, msg: 'Not authenticated' });
-        }
-
-        const user = await getUserByUsername(req.cookies.username);
-        if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
-            return res.json({ okay: false, msg: 'Invalid token' });
-        }
-
-        const miiIds = [...user.submissions];
+        const miiIds = [...req.user.submissions];
         let deletedCount = 0;
 
         for (const miiId of miiIds) {
@@ -3448,7 +3327,7 @@ site.post('/deleteAllMyMiis', async (req, res) => { // TODO: verify no CSRF
                     try { fs.unlinkSync(`./static/miiQRs/${miiId}.png`); } catch(e) {}
                     
                     // Delete Mii from database
-                    await Mii.deleteOne({ id: miiId });
+                    await Miis.deleteOne({ id: miiId });
                     deletedCount++;
                 }
             } catch(e) {
@@ -3456,7 +3335,7 @@ site.post('/deleteAllMyMiis', async (req, res) => { // TODO: verify no CSRF
             }
         }
 
-        await User.findOneAndUpdate(
+        await Users.findOneAndUpdate(
             { username: req.cookies.username },
             { submissions: [] }
         );
@@ -3481,7 +3360,7 @@ site.post('/deleteAllMyMiis', async (req, res) => { // TODO: verify no CSRF
                 ]
             }]
         }));
-        sendEmail(user.email,`All Miis Deleted - InfiniMii`,`Hi ${req.cookies.username}, we received a request to delete all of your Miis. If this wasn't you, reply to this email to receive support.`);
+        sendEmail(req.user.email,`All Miis Deleted - InfiniMii`,`Hi ${req.cookies.username}, we received a request to delete all of your Miis. If this wasn't you, reply to this email to receive support.`);
         res.json({ okay: true, deletedCount });
     } catch (e) {
         console.error('Error deleting all user Miis:', e);
@@ -3490,29 +3369,20 @@ site.post('/deleteAllMyMiis', async (req, res) => { // TODO: verify no CSRF
 });
 
 // Delete Account (User)
-site.post('/deleteAccount', async (req, res) => {
+site.post('/deleteAccount', requireAuth, async (req, res) => {
     try {
-        if (!req.cookies.username || !req.cookies.token) {
-            return res.json({ okay: false, msg: 'Not authenticated' });
-        }
-
-        const username = req.cookies.username;
-        const user = await getUserByUsername(username);
-        if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
-            return res.json({ okay: false, msg: 'Invalid token' });
-        }
-
+        const username = req.user.username;
         const { password } = req.body;
 
         // Verify password
-        if (!validatePassword(password, user.salt, user.pass)) {
+        if (!validatePassword(password, req.user.salt, req.user.pass)) {
             return res.json({ okay: false, msg: 'Password is incorrect' });
         }
 
         // Transfer Miis to a special "Deleted User" account
         let deletedUser = await getUserByUsername("[Deleted User]");
         if (!deletedUser) {
-            await User.create({
+            await Users.create({
                 username: "[Deleted User]",
                 salt: "",
                 pass: "",
@@ -3526,18 +3396,18 @@ site.post('/deleteAccount', async (req, res) => {
         }
 
         // Transfer all Miis to deleted user account
-        await Mii.updateMany(
+        await Miis.updateMany(
             { uploader: username },
             { uploader: "[Deleted User]" }
         );
         
-        await User.findOneAndUpdate(
+        await Users.findOneAndUpdate(
             { username: "[Deleted User]" },
-            { $push: { submissions: { $each: user.submissions } } }
+            { $push: { submissions: { $each: req.user.submissions } } }
         );
 
         // Delete user account
-        await User.deleteOne({ username });
+        await Users.deleteOne({ username });
 
         // Clear cookies
         res.clearCookie('username');
@@ -3557,13 +3427,13 @@ site.post('/deleteAccount', async (req, res) => {
                     },
                     {
                         name: 'Miis Transferred',
-                        value: user.submissions.length.toString(),
+                        value: req.user.submissions.length.toString(),
                         inline: true
                     }
                 ]
             }]
         }));
-        sendEmail(user.email,`Account Deleted - InfiniMii`,`Hi ${req.cookies.username}, we received a request to delete your account. We're sorry to see you go! If this wasn't you, please reply to this email to receive support.`)
+        sendEmail(req.user.email,`Account Deleted - InfiniMii`,`Hi ${req.cookies.username}, we received a request to delete your account. We're sorry to see you go! If this wasn't you, please reply to this email to receive support.`)
         res.json({ okay: true });
     } catch (e) {
         console.error('Error deleting account:', e);
@@ -3604,26 +3474,20 @@ site.get('/getInstructions', async (req, res) => {
     }
 });
 
-site.post('/uploadMii', upload.single('mii'), async (req, res) => {
+site.post('/uploadMii', requireAuth, upload.single('mii'), async (req, res) => {
     try {
-        let uploader = req.cookies.username;
-        const user = await getUserByUsername(uploader);
-        if (!user || !validatePassword(req.cookies.token, user.salt, user.token)) {
-            res.send("{'okay':false,'error':'Invalid authentication'}");
-            try { fs.unlinkSync("./uploads/" + req.file.filename); } catch (e) { }
-            return;
-        }
+        let uploader = req.user.username;
         
         // Check private Mii limit
-        if (!user.privateMiis) user.privateMiis = [];
-        if (user.privateMiis.length >= PRIVATE_MII_LIMIT) {
+        if (!req.user.privateMiis) user.privateMiis = [];
+        if (req.user.privateMiis.length >= Number(PRIVATE_MII_LIMIT)) {
             res.send(`{'okay':false,'error':'You have reached the limit of ${PRIVATE_MII_LIMIT} private Miis. Please publish or delete some before uploading more.'}`);
             try { fs.unlinkSync("./uploads/" + req.file.filename); } catch (e) { }
             return;
         }
         
         // Check if trying to upload official Mii without permission
-        if (req.body.official && !canUploadOfficial(user)) {
+        if (req.body.official && !canUploadOfficial(req.user)) {
             res.send("{'error':'Only Researchers and Administrators can upload official Miis'}");
             try { fs.unlinkSync("./uploads/" + req.file.filename); } catch (e) { }
             return;
@@ -3633,26 +3497,30 @@ site.post('/uploadMii', upload.single('mii'), async (req, res) => {
         if (req.body.type === "wii") {
             // Read Wii Mii and convert TO 3DS format
             const wiiMii = await miijs.readWiiBin("./uploads/" + req.file.filename);
-            mii = miijs.convertMii(wiiMii, "3ds"); // ✅ Convert TO 3DS
+            mii = miijs.convertMii(wiiMii, "3ds"); // Convert TO 3DS
         }
         else if (req.body.type === "3ds") {
             mii = await miijs.read3DSQR("./uploads/" + req.file.filename);
         }
         else if (req.body.type === "3dsbin") {
-            if (!req.file) {
+            var binData;
+            if (req.file) {
+                try {
+                    // Read the uploaded file as a buffer
+                    binData = fs.readFileSync("./uploads/" + req.file.filename);
+                } catch (e) {
+                    console.error('Error reading 3DS bin file:', e);
+                    res.send(`{'error':'Invalid 3DS bin file: ${e.message}'}`);
+                    try { fs.unlinkSync("./uploads/" + req.file.filename); } catch (e2) { }
+                    return;
+                }
                 res.send("{'error':'No file uploaded for 3DS bin'}");
                 return;
             }
-            try {
-                // Read the uploaded file as a buffer
-                const binData = fs.readFileSync("./uploads/" + req.file.filename);
-                mii = await miijs.read3DSQR(binData);
-            } catch (e) {
-                console.error('Error reading 3DS bin file:', e);
-                res.send(`{'error':'Invalid 3DS bin file: ${e.message}'}`);
-                try { fs.unlinkSync("./uploads/" + req.file.filename); } catch (e2) { }
-                return;
+            else{
+                binData=bitStringToBuffer(req.body['3dsbin']);
             }
+            mii = await miijs.read3DSQR(binData);
         }
         else if (req.body.type === "3dsbin_amiibo") {
             // Uploading from Amiibo extraction
@@ -3695,7 +3563,7 @@ site.post('/uploadMii', upload.single('mii'), async (req, res) => {
             }
         }
         
-        mii.id = genId();
+        mii.id = await genId();
         mii.uploadedOn = Date.now();
         mii.uploader = req.body.official ? "Nintendo" : uploader;
         mii.desc = req.body.desc;
@@ -3710,15 +3578,15 @@ site.post('/uploadMii', upload.single('mii'), async (req, res) => {
         await miijs.write3DSQR(mii, "./static/privateMiiQRs/" + mii.id + ".png");
         
         // Add to user's private Miis
-        await User.findOneAndUpdate(
+        await Users.findOneAndUpdate(
             { username: uploader },
             { $push: { privateMiis: mii.id } }
         );
         
         // Store in database as private Mii
-        await Mii.create({
+        await Miis.create({
             ...mii,
-            _id: mii.id,
+            id: mii.id,
             private: true
         });
         
@@ -3733,7 +3601,7 @@ site.post('/uploadMii', upload.single('mii'), async (req, res) => {
                 "fields": [
                     {
                         "name": `Mii Name`,
-                        "value": mii.meta?.name || mii.name || "Unknown",
+                        "value": mii.meta?.name || "Unknown",
                         "inline": true
                     },
                     {
@@ -3743,7 +3611,7 @@ site.post('/uploadMii', upload.single('mii'), async (req, res) => {
                     },
                     {
                         "name": `Mii Creator Name`,
-                        "value": mii.meta?.creatorName || mii.creatorName || "Unknown",
+                        "value": mii.meta?.creatorName || "Unknown",
                         "inline": true
                     }
                 ],
@@ -3770,21 +3638,8 @@ site.post('/uploadMii', upload.single('mii'), async (req, res) => {
     }
 });
 // Update Official Mii Categories (Researcher+)
-site.post('/updateOfficialCategories', async (req, res) => {
+site.post('/updateOfficialCategories', requireAuth, requireRole(ROLES.RESEARCHER), async (req, res) => {
     try {
-        if (!req.cookies.username || !req.cookies.token) {
-            return res.json({ okay: false, error: 'Not authenticated' });
-        }
-
-        const currentUser = await getUserByUsername(req.cookies.username);
-        if (!currentUser || !validatePassword(req.cookies.token, currentUser.salt, currentUser.token)) {
-            return res.json({ okay: false, error: 'Invalid token' });
-        }
-
-        if (!canEditOfficial(currentUser)) {
-            return res.json({ okay: false, error: 'Insufficient permissions - Researcher role required' });
-        }
-
         const { miiId, categories } = req.body;
 
         if (!miiId || !Array.isArray(categories)) {
@@ -3803,7 +3658,7 @@ site.post('/updateOfficialCategories', async (req, res) => {
         const oldCategories = mii.officialCategories || [];
         const newCategories = [...new Set(categories.filter(c => c && c.trim()))];
         
-        await Mii.findOneAndUpdate(
+        await Miis.findOneAndUpdate(
             { id: miiId },
             { officialCategories: newCategories }
         );
@@ -3817,7 +3672,7 @@ site.post('/updateOfficialCategories', async (req, res) => {
                 fields: [
                     {
                         name: 'Mii',
-                        value: `[${mii.meta?.name || mii.name}](https://infinimii.com/mii/${miiId})`,
+                        value: `[${mii.meta?.name || mii.meta.name}](https://infinimii.com/mii/${miiId})`,
                         inline: true
                     },
                     {
@@ -3852,21 +3707,8 @@ site.get('/getOfficialCategories', async (req, res) => {
 });
 
 // Add new category (can be root or nested under a parent)
-site.post('/addCategory', async (req, res) => {
+site.post('/addCategory', requireAuth, requireRole(ROLES.RESEARCHER), async (req, res) => {
     try {
-        if (!req.cookies.username || !req.cookies.token) {
-            return res.json({ okay: false, error: 'Not authenticated' });
-        }
-
-        const currentUser = await getUserByUsername(req.cookies.username);
-        if (!currentUser || !validatePassword(req.cookies.token, currentUser.salt, currentUser.token)) {
-            return res.json({ okay: false, error: 'Invalid token' });
-        }
-
-        if (!canEditOfficial(currentUser)) {
-            return res.json({ okay: false, error: 'Insufficient permissions' });
-        }
-
         const { name, color, parentPath } = req.body;
 
         if (!name || !name.trim()) {
@@ -3950,21 +3792,8 @@ site.post('/addCategory', async (req, res) => {
 });
 
 // Rename category and update all Miis using it or its descendants
-site.post('/renameCategory', async (req, res) => {
+site.post('/renameCategory', requireAuth, requireRole(ROLES.RESEARCHER), async (req, res) => {
     try {
-        if (!req.cookies.username || !req.cookies.token) {
-            return res.json({ okay: false, error: 'Not authenticated' });
-        }
-
-        const currentUser = await getUserByUsername(req.cookies.username);
-        if (!currentUser || !validatePassword(req.cookies.token, currentUser.salt, currentUser.token)) {
-            return res.json({ okay: false, error: 'Invalid token' });
-        }
-
-        if (!canEditOfficial(currentUser)) {
-            return res.json({ okay: false, error: 'Insufficient permissions' });
-        }
-
         const { path, newName } = req.body;
 
         if (!path || !newName || !newName.trim()) {
@@ -4054,21 +3883,8 @@ site.post('/renameCategory', async (req, res) => {
 });
 
 // Delete category and all its descendants, remove from all Miis
-site.post('/deleteCategory', async (req, res) => {
+site.post('/deleteCategory', requireAuth, requireRole(ROLES.RESEARCHER), async (req, res) => {
     try {
-        if (!req.cookies.username || !req.cookies.token) {
-            return res.json({ okay: false, error: 'Not authenticated' });
-        }
-
-        const currentUser = await getUserByUsername(req.cookies.username);
-        if (!currentUser || !validatePassword(req.cookies.token, currentUser.salt, currentUser.token)) {
-            return res.json({ okay: false, error: 'Invalid token' });
-        }
-
-        if (!canEditOfficial(currentUser)) {
-            return res.json({ okay: false, error: 'Insufficient permissions' });
-        }
-
         const { path } = req.body;
 
         if (!path) {
@@ -4141,21 +3957,8 @@ site.post('/deleteCategory', async (req, res) => {
 });
 
 // Move category to a new parent
-site.post('/moveCategory', async (req, res) => {
+site.post('/moveCategory', requireAuth, requireRole(ROLES.RESEARCHER), async (req, res) => {
     try {
-        if (!req.cookies.username || !req.cookies.token) {
-            return res.json({ okay: false, error: 'Not authenticated' });
-        }
-
-        const currentUser = await getUserByUsername(req.cookies.username);
-        if (!currentUser || !validatePassword(req.cookies.token, currentUser.salt, currentUser.token)) {
-            return res.json({ okay: false, error: 'Invalid token' });
-        }
-
-        if (!canEditOfficial(currentUser)) {
-            return res.json({ okay: false, error: 'Insufficient permissions' });
-        }
-
         const { categoryPath, newParentPath } = req.body;
 
         if (!categoryPath) {
@@ -4273,28 +4076,15 @@ site.get('/getOfficialCategories', async (req, res) => {
     }
 });
 // Publish a private Mii
-site.post('/publishMii', async (req, res) => {
+site.post('/publishMii', requireAuth,  async (req, res) => {
     try {
-        if (!req.cookies.username || !req.cookies.token) {
-            return res.json({ okay: false, error: 'Not authenticated' });
-        }
-
-        const user = await getUserByUsername(req.cookies.username);
-        if (!user) {
-            return res.json({ okay: false, error: 'User not found' });
-        }
-
-        if (!validatePassword(req.cookies.token, user.salt, user.token)) {
-            return res.json({ okay: false, error: 'Invalid token' });
-        }
-
         const { miiId } = req.body;
         
-        if (!user.privateMiis || !user.privateMiis.includes(miiId)) {
+        if (!req.user.privateMiis || !req.user.privateMiis.includes(miiId)) {
             return res.json({ okay: false, error: 'Mii not found in your private collection' });
         }
 
-        const mii = await Mii.findOne({ id: miiId, private: true }).lean();
+        const mii = await Miis.findOne({ id: miiId, private: true }).lean();
         if (!mii) {
             return res.json({ okay: false, error: 'Mii data not found' });
         }
@@ -4307,11 +4097,11 @@ site.post('/publishMii', async (req, res) => {
         // Move files from private to public folders
         try {
             if (fs.existsSync(`./static/privateMiiImgs/${miiId}.png`)) {
-                fs.unlink(`./static/privateMiiImgs/${miiId}.png`);
+                fs.unlink(`./static/privateMiiImgs/${miiId}.png`,()=>{});
             }
             
             if (fs.existsSync(`./static/privateMiiQRs/${miiId}.png`)) {
-                fs.unlink(`./static/privateMiiQRs/${miiId}.png`);
+                fs.unlink(`./static/privateMiiQRs/${miiId}.png`,()=>{});
             }
         } catch (e) {
             console.error('Error moving Mii files:', e);
@@ -4329,13 +4119,13 @@ site.post('/publishMii', async (req, res) => {
         }
 
         // Update Mii status to published and public
-        await Mii.findOneAndUpdate(
+        await Miis.findOneAndUpdate(
             { id: miiId },
             { $set: { private: false, published: true } }
         );
         
         // Move to user's submissions and remove from privateMiis
-        await User.findOneAndUpdate(
+        await Users.findOneAndUpdate(
             { username: req.cookies.username },
             {
                 $push: { submissions: miiId },
@@ -4354,7 +4144,7 @@ site.post('/publishMii', async (req, res) => {
                 "fields": [
                     {
                         "name": `Mii Name`,
-                        "value": mii.name || mii.meta?.name,
+                        "value": mii.meta.name,
                         "inline": true
                     },
                     {
@@ -4385,33 +4175,16 @@ site.post('/publishMii', async (req, res) => {
     }
 });
 // Block a private Mii from being published (Moderator only)
-site.post('/blockMiiFromPublishing', async (req, res) => {
+site.post('/blockMiiFromPublishing', requireAuth, requireRole(ROLES.MODERATOR), async (req, res) => {
     try {
-        if (!req.cookies.username || !req.cookies.token) {
-            return res.json({ okay: false, error: 'Not authenticated' });
-        }
-
-        const user = await getUserByUsername(req.cookies.username);
-        if (!user) {
-            return res.json({ okay: false, error: 'User not found' });
-        }
-
-        if (!validatePassword(req.cookies.token, user.salt, user.token)) {
-            return res.json({ okay: false, error: 'Invalid token' });
-        }
-
-        if (!canModerate(user)) {
-            return res.json({ okay: false, error: 'Not authorized' });
-        }
-
         const { miiId, reason } = req.body;
 
-        const mii = await Mii.findOne({ id: miiId, private: true }).lean();
+        const mii = await Miis.findOne({ id: miiId, private: true }).lean();
         if (!mii) {
             return res.json({ okay: false, error: 'Private Mii not found' });
         }
 
-        await Mii.findOneAndUpdate(
+        await Miis.findOneAndUpdate(
             { id: miiId },
             { 
                 $set: { 
@@ -4430,7 +4203,7 @@ site.post('/blockMiiFromPublishing', async (req, res) => {
                 fields: [
                     {
                         name: 'Mii Name',
-                        value: mii.name || mii.meta?.name,
+                        value: mii.meta.name,
                         inline: true
                     },
                     {
@@ -4453,6 +4226,7 @@ site.post('/blockMiiFromPublishing', async (req, res) => {
     }
 });
 site.post('/convertMii', upload.single('mii'), async (req, res) => {
+    // TODO: Verify that mii.name is valid here
     try {
         let mii;
         if (req.body.fromType === "3DS/Wii U") {
@@ -4503,6 +4277,9 @@ site.post('/convertMii', upload.single('mii'), async (req, res) => {
     }
 });
 site.post('/signup', async (req, res) => {
+    // TODO: prevent email exploits
+    // TODO: it is allowing multiple signups under same email rn
+
     const existingUser = await getUserByUsername(req.body.username);
     if (existingUser || !validate(req.body.username)) {
         res.send("Username Invalid");
@@ -4520,7 +4297,7 @@ site.post('/signup', async (req, res) => {
     var hashed = hashPassword(req.body.pass);
     var token = genToken();
     
-    await User.create({
+    await Users.create({
         username: req.body.username,
         salt: hashed.salt,
         pass: hashed.hash,
@@ -4540,7 +4317,7 @@ site.post('/signup', async (req, res) => {
 });
 site.post('/login', async (req, res) => {
     const user = await getUserByUsername(req.body.username);
-    if (!user) {
+    if (!user) { // TODO: validate this is right... this is just checking username
         res.send("Invalid username or password");
         return;
     }
@@ -4548,7 +4325,7 @@ site.post('/login', async (req, res) => {
     if (validatePassword(req.body.pass, user.salt, user.pass)) {
         if (user.verified) {
             var token = genToken();
-            await User.findOneAndUpdate(
+            await Users.findOneAndUpdate(
                 { username: req.body.username },
                 { $set: { token: hashPassword(token, user.salt).hash } }
             );

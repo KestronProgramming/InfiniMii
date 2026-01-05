@@ -14,6 +14,7 @@
         <link rel="stylesheet" href="/upload.css">
     </head>
     <body>
+        <%- partials.globalStyle %>
         <%- partials.header %>
         <%- partials.accountDisplay %>
         <main class='content' role="main">
@@ -327,11 +328,11 @@
                         <div id="studioTab" class="tab-content">
                             <form action="/uploadStudioMii" method="post" id="studioForm">
                                 <p style="color: var(--text-2); margin-bottom: 1rem;">
-                                    Paste your Mii Studio code (either the hex code or the full URL from studio.mii.nintendo.com)
+                                    Paste your Mii Studio code
                                 </p>
                                 
                                 <label for="studioCode">Studio Code:</label>
-                                <input type="text" name="studioCode" id="studioCode" placeholder="Enter Mii Studio code or URL" required>
+                                <input type="text" name="studioCode" id="studioCode" placeholder="Enter Mii Studio code" required>
                                 
                                 <p style="color: var(--text-3); font-size: 0.9em; margin-top: 0.5rem;">
                                     ℹ️ The Mii will be rendered locally after upload - no preview available before uploading.

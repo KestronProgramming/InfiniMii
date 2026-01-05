@@ -1,7 +1,7 @@
 /* Profile Page Styles */
 
 .profile-container {
-    background-color: var(--layer-2);
+    background-color: var(--layer-2-um);
     border: 2px solid #202020;
     border-radius: 25px;
     padding: 2rem;

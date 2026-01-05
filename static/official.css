@@ -20,8 +20,8 @@
 }
 
 .category-filter {
-    background: white;
-    border: 2px solid #ddd;
+    background: var(--layer-2-um);
+    border: 2px solid var(--layer-2-border);
     border-radius: 12px;
     padding: 20px;
     margin-bottom: 30px;
@@ -30,7 +30,7 @@
 .category-filter h3 {
     margin-top: 0;
     margin-bottom: 15px;
-    color: #333;
+    color: var(--brand-color);
 }
 
 .filter-buttons {
@@ -42,7 +42,7 @@
 .filter-btn {
     display: inline-block;
     padding: 10px 16px;
-    background: #f5f5f5;
+    background: var(--layer-2-um);
     border: 2px solid #ddd;
     border-radius: 8px;
     text-decoration: none;
@@ -51,21 +51,54 @@
     transition: all 0.3s;
 }
 
-.filter-btn:hover {
-    background: #e8e8e8;
-    border-color: #bbb;
-    transform: translateY(-2px);
+.filter-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 10px 16px;
+    background: var(--layer-3-um);
+    border: 1px solid color-mix(in oklab, var(--layer-3-um) 80%, #6e6e6e 30%);
+    border-radius: 8px;
+    text-decoration: none;
+    color: var(--text-color);
+    font-weight: 500;
+    transition: all 0.3s;
 }
 
+.category-path {
+    font-size: 0.75em;
+    opacity: 0.7;
+    color: var(--text-muted);
+    font-weight: normal;
+    margin-top: 4px;
+}
+
+.filter-btn:hover {
+    background: color-mix(in oklab, var(--layer-3-um) 80%, var(--layer-2-um) 30%);
+    border-color: color-mix(in oklab, var(--layer-3-um) 30%, #999 80%);
+    /* transform: translateY(-2px); */
+
+}
+
+.filter-btn.active .category-path,
+.filter-btn:hover .category-path {
+    opacity: 1;
+}
+
+
 .filter-btn.active {
-    background: #ff0000;
+    background: #ce2222;
     color: white;
     border-color: #cc0000;
 }
+.filter-btn.active .category-path {
+    font-weight: 600;
+}
 
 .current-filter {
-    background: #fff3cd;
-    border: 2px solid #ffc107;
+    /* background: #fff3cd; */
+    background-color: color-mix(in oklab, #fff3cd 20%, var(--layer-2-um) 80%);
+    border: 1px solid #ffc107;
     padding: 12px 20px;
     border-radius: 8px;
     margin-bottom: 20px;
@@ -127,7 +160,8 @@
 .no-results {
     text-align: center;
     padding: 60px 20px;
-    background: white;
+    /* background: white; */
+    background-color: var(--layer-2-um);
     border-radius: 12px;
     border: 2px dashed #ddd;
 }
@@ -169,28 +203,3 @@
     }
 }
 /* Add to static/official.css */
-
-.filter-btn {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    padding: 10px 16px;
-    background: #f5f5f5;
-    border: 2px solid #ddd;
-    border-radius: 8px;
-    text-decoration: none;
-    color: #333;
-    font-weight: 500;
-    transition: all 0.3s;
-}
-
-.category-path {
-    font-size: 0.75em;
-    color: #999;
-    font-weight: normal;
-    margin-top: 4px;
-}
-
-.filter-btn:hover .category-path {
-    color: #666;
-}

@@ -50,6 +50,16 @@
     url('./fonts/poppins-v20-latin-600.woff') format('woff');
 }
 
+@font-face {
+    font-family: 'Twemoji Mozilla';
+    src: url('./fonts/Twemoji.Mozilla.ttf') format('truetype');
+}
+.emoji {
+    font-family: 'Twemoji Mozilla', sans-serif;
+    font-size: 2ch;
+    height: 1lh;
+}
+
 :root {
     --gutter-size: 40px;
     --layer-1: #0E0C10;
@@ -58,6 +68,10 @@
     --brand-color: #DE4362;
     --text-1: #fff;
     --text-2: #aaa1a6;
+
+    --layer-1-um: color-mix(in oklab, var(--layer-1) 94%, var(--user-pfp-mii-color) 6%);
+    --layer-2-um: color-mix(in oklab, var(--layer-2) 96%, var(--user-pfp-mii-color) 4%);
+    --layer-3-um: color-mix(in oklab, var(--layer-3) 98%, var(--user-pfp-mii-color) 2%);
 }
 
 * {
@@ -65,7 +79,11 @@
 }
 
 body {
-    background-color: var(--layer-1);
+    background-color: var(--layer-1-um);
+    --lighter-color: color-mix(in lab, var(--layer-1) 94%, var(--user-pfp-mii-color) 6%);
+    /* --darker-color: color-mix(in oklab, var(--layer-1) 97%, var(--user-pfp-mii-color) 3%); */
+    /* background: var(--layer-1) radial-gradient(circle, var(--lighter-color) 15%, var(--darker-color) 100%); */
+    background: var(--layer-1) radial-gradient(circle, var(--lighter-color) 15%, var(--layer-1-um) 100%);
     color: var(--text-1);
     margin: 0;
     font: 400 16px / 1.75 Poppins, sans-serif;
@@ -100,11 +118,15 @@ header img{
 }
 
 .account img {
-    width: 25px;
-    height: 25px;
-    border-radius: 50%;
-    margin-right: 8px;
+    margin-right: .3rem;
+    background-color: color-mix(in lab, var(--layer-2-um) 50%, var(--brand-color) 80%);
+}
+.account-image-small {
+    width: 2ch;
+    height: auto;
     vertical-align: middle;
+    background-color: color-mix(in lab, var(--layer-2-um) 40%, var(--layer-3-um) 80%);
+    border-radius: 50%;
 }
 
 .account a {
@@ -118,7 +140,7 @@ header img{
     position: absolute;
     top: calc(100%);
     right: 0;
-    background-color: var(--layer-2);
+    background-color: var(--layer-2-um);
     min-width: 160px;
     box-shadow: 0px 8px 16px 0px rgba(0, 0, 0, 0.4);
     border-radius: 8px;
@@ -200,7 +222,7 @@ footer ul li a:hover {
 }
 
 .sidebar-list {
-    background-color: var(--layer-2);
+    background-color: var(--layer-2-um);
     border-radius: 15px;
     list-style: none;
     margin: 0 0 20px 0;
@@ -247,14 +269,36 @@ footer ul li a:hover {
     flex-flow: column;
     width: 200px;
     border: 2px solid #202020;
-    padding: 1.5rem;
     border-radius: 25px;
-    background-color: var(--layer-2);
+    background-color: var(--layer-2-um);
     transition: transform 0.3s ease, box-shadow 0.3s ease;
 }
 
 .mii-card:hover {
     box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
+}
+
+ .mii-card .flex, .mii-card > p {
+    padding: 1.5rem;
+}
+
+.mii-card > a:has(img) {
+    position: relative;
+    display: block;
+    isolation: isolate;
+}
+.mii-card > a:has(img)::before {
+    z-index: -1;
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    border-radius: 25px 25px 0 0;
+    --darker-color: color-mix(in oklab, #222 60%, var(--favorite-color) 30%);
+    --lighter-color: color-mix(in oklab, #555 90%, var(--favorite-color) 60%);
+    background: radial-gradient(circle, var(--lighter-color) 26%, var(--darker-color) 100%);
 }
 
 .mii-card img {
@@ -263,8 +307,9 @@ footer ul li a:hover {
     aspect-ratio: 1;
     display: block;
     border-radius: 30px;
-    margin-bottom: 1rem;
-    transition: 1s;
+    /* margin-bottom: 1rem; */
+    transition: 585ms;
+    transform-origin: bottom;
 }
 
 .mii-card img:hover {
@@ -374,9 +419,9 @@ footer ul li a:hover {
     width: 100%;
     padding: 8px;
     margin-bottom: 8px;
-    border: 2px solid var(--layer-3);
+    border: 2px solid var(--layer-3-um);
     border-radius: 5px;
-    background-color: var(--layer-1);
+    background-color: var(--layer-1-um);
     color: white;
     font-family: Poppins, sans-serif;
 }
@@ -421,9 +466,9 @@ textarea {
     width: 100%;
     padding: 12px 16px;
     margin: 0.5rem 0;
-    border: 2px solid var(--layer-3);
+    border: 2px solid var(--layer-3-um);
     border-radius: 8px;
-    background-color: var(--layer-1);
+    background-color: var(--layer-1-um);
     color: var(--text-1);
     font-family: Poppins, sans-serif;
     font-size: 16px;
@@ -584,7 +629,7 @@ fieldset a:hover {
 
 /* Footer Styles */
 .site-footer {
-    background: var(--layer-2);
+    background: var(--layer-2-um);
     border-top: 3px solid var(--brand-color);
     margin-top: 4rem;
     padding: 3rem 2rem 1rem;
@@ -629,7 +674,7 @@ fieldset a:hover {
 .footer-bottom {
     text-align: center;
     padding-top: 2rem;
-    border-top: 1px solid var(--layer-3);
+    border-top: 1px solid var(--layer-3-um);
     color: var(--text-2);
     font-size: 0.9rem;
 }

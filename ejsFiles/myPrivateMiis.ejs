@@ -14,27 +14,23 @@
         <link rel="stylesheet" href="/privateMiis.css">
     </head>
     <body>
+        <%- partials.globalStyle %>
         <%- partials.header %>
         <%- partials.accountDisplay %>
         <main class='content' role="main">
             <%- partials.sidebar %>
             <div class='private-miis-container'>
                 <div class="private-header">
-                    <h1>🔒 My Private Miis</h1>
+                    <h1><span class="emoji">🔒</span> My Private Miis</h1>
                     <p class="limit-info">
                         <%= privateMiis.length %> / <%= privateLimit %> private Miis
                     </p>
-                    <p class="info-text">
-                        These Miis are uploaded but not yet published. Only you and moderators can see them.
-                        Publish them to make them visible to everyone!
-                    </p>
-                    <a href="/upload" class="upload-button">📤 Upload New Mii</a>
                 </div>
 
                 <% if(privateMiis.length > 0) { %>
                     <div id="private-miis-grid">
                         <% for(var i=0; i<privateMiis.length; i++){ %>
-                            <article class="private-mii-card" data-mii-id="<%= privateMiis[i].id %>">
+                            <article class="private-mii-card" data-mii-id="<%= privateMiis[i].id %>" style="--favorite-color: <%= decodeColor(privateMiis[i].general?.favoriteColor) || decodeColor(0) %>;">
                                 <a href="<%= '/mii/'+privateMiis[i].id %>" aria-label="View <%= privateMiis[i].meta?.name || privateMiis[i].name %>">
                                     <img src="/privateMiiImgs/<%= privateMiis[i].id %>.png" 
                                          onerror="this.src='/privateMiiImgs/<%= privateMiis[i].id %>.png'"

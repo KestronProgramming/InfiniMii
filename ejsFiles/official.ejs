@@ -7,6 +7,7 @@
         <link rel="stylesheet" href="official.css">
     </head>
     <body>
+        <%- partials.globalStyle %>
         <%- partials.header %>
         <%- partials.accountDisplay %>
         <div class="content">
@@ -24,6 +25,7 @@
                     <div class="filter-buttons">
                         <a href="/official" class="filter-btn <%= !currentFilter ? 'active' : '' %>">
                             All (<%= displayedMiis.length %>)
+                            <span class="category-path">Everything</span>
                         </a>
                         <% availableCategories.forEach(category => { %>
                             <a href="/official?category=<%= encodeURIComponent(category.path) %>" 
@@ -49,7 +51,7 @@
                 <% if(displayedMiis.length > 0) { %>
                     <div id="browse-miis">
                         <% for(var i=0; i<displayedMiis.length; i++){ %>
-                            <div class="mii-card" id="<%= displayedMiis[i].id %>">
+                            <div class="mii-card" id="<%= displayedMiis[i].id %>" style="--favorite-color: <%= decodeColor(displayedMiis[i].general?.favoriteColor) || decodeColor(0) %>;">
                                 <a href="<%= '/mii/'+displayedMiis[i].id %>">
                                     <img src="miiImgs/<%= displayedMiis[i].id %>.png" 
                                          alt="<%= displayedMiis[i].meta?.name || displayedMiis[i].name %>">

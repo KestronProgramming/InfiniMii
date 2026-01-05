@@ -11,8 +11,20 @@ const miiSchema = new mongoose.Schema({
     official: { type: Boolean, default: false, index: true },
     uploadedOn: { type: Number, default: () => Date.now(), index: true },
     console: { type: String, default: "3DS" },
-    general: mongoose.Schema.Types.Mixed,
-    meta: mongoose.Schema.Types.Mixed,
+    general: {
+        height: Number,
+        weight: Number,
+        favoriteColor: Number,
+        birthday: Number,
+        birthMonth: Number,
+        gender: Number
+    },
+    meta: {
+        creatorName: { type: String, default: "" },
+        name: { type: String, default: "" },
+        console: { type: String, default: "3DS", },
+        type: mongoose.Schema.Types.Mixed,
+    },
     perms: mongoose.Schema.Types.Mixed,
     hair: mongoose.Schema.Types.Mixed,
     face: mongoose.Schema.Types.Mixed,
@@ -38,7 +50,7 @@ const userSchema = new mongoose.Schema({
     creationDate: { type: Number, default: () => Date.now() },
     email: String,
     votedFor: { type: [String], default: [] },
-    submissions: { type: [String], default: [] },
+    submissions: { type: [String], default: [] }, // TODO_DB: remove this
     miiPfp: { type: String, default: "00000" },
     roles: { type: [String], default: ["basic"] },
     token: String,
@@ -66,6 +78,34 @@ const Settings = mongoose.model("Settings", settingsSchema);
 const connectionPromise = mongoose.connect("mongodb://localhost:27017/infinimii", {
     autoIndex: true
 });
+
+
+
+// Clear indexes
+async function clearIndexes() {
+    try {
+        await connectionPromise; // Wait for connection
+        console.log('Connected to MongoDB. Dropping indexes...');
+
+        // Drop indexes on each collection (keeps _id index)
+        await Mii.collection.dropIndexes();
+        console.log('Dropped indexes on Miis collection.');
+
+        await User.collection.dropIndexes();
+        console.log('Dropped indexes on Users collection.');
+
+        await Settings.collection.dropIndexes();
+        console.log('Dropped indexes on Settings collection.');
+
+        console.log('All indexes cleared. Exiting...');
+        // process.exit(0);
+    } catch (error) {
+        console.error('Error clearing indexes:', error);
+        // process.exit(1);
+    }
+}
+clearIndexes();
+
 
 module.exports = {
     connectionPromise,

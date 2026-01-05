@@ -1,6 +1,6 @@
 <div class="account">
     <% if(thisUser!=="Default"){ %>
-        <img src="/miiImgs/<%= pfp %>.png"> <%= thisUser %>
+        <img class="account-image-small" src="/miiImgs/<%= pfp %>.png"> <%= thisUser %>
         <div class="accDropdown">
             <a href="/user/<%= thisUser %>">Profile</a>
             <a href="/settings">Settings</a>

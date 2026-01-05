@@ -11,7 +11,10 @@ TODO.md
 env.json
 FFLResHigh.dat
 testFiles
-temp
+temp/*
 feedback.txt
 serveFeedback.js
 migrate.js
+
+nonGitIgnoredTestFiles
+deprecatedStorage.json

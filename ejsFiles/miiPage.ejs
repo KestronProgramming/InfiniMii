@@ -27,6 +27,7 @@
         <link rel="preload" as="image" href="/miiImgs/<%= mii.id %>.png">
     </head>
     <body>
+        <%- partials.globalStyle %>
         <% 
             const imgPath = isPrivate ? 'privateMiiImgs' : 'miiImgs';
             const qrPath = isPrivate ? 'privateMiiQRs' : 'miiQRs';
@@ -37,7 +38,7 @@
         <main class="content" role="main">
             <%- partials.sidebar %>
 
-            <article class="mii-id-card" itemscope itemtype="https://schema.org/CreativeWork">
+            <article class="mii-id-card" style="--favorite-color: <%= decodeColor(mii.general?.favoriteColor) || decodeColor(0) %>;" itemscope itemtype="https://schema.org/CreativeWork">
                 <!-- Card Header -->
                 <header class="id-card-header">
                     <h2 itemprop="name">Mii ID Card</h2>

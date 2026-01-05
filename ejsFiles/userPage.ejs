@@ -11,6 +11,7 @@
         <link rel="stylesheet" href="/profile.css">
     </head>
     <body>
+        <%- partials.globalStyle %>
         <%- partials.header %>
         <%- partials.accountDisplay %>
         <div class="content">
@@ -176,7 +177,7 @@
                     <% if(displayedMiis.length> 0) { %>
                         <div id="browse-miis">
                             <% for(var i=0; i<displayedMiis.length && i<50; i++){ %>
-                                <div class="mii-card" id="<%= displayedMiis[i].id %>">
+                                <div class="mii-card" id="<%= displayedMiis[i].id %>" style="--favorite-color: <%= decodeColor(displayedMiis[i].general?.favoriteColor) || decodeColor(0) %>;">
                                     <a href="<%= '/mii/'+displayedMiis[i].id %>">
                                         <img src="/miiImgs/<%= displayedMiis[i].id %>.png" alt="<%= displayedMiis[i].meta?.name || displayedMiis[i].name %>">
                                     </a>

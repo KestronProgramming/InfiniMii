@@ -1,49 +1,42 @@
+
+
 .private-miis-container {
     max-width: 1400px;
+    min-width: 80%;
     margin: 0 auto;
 }
 
 .private-header {
-    background: linear-gradient(135deg, var(--brand-color) 0%, #1e88a8 100%);
-    padding: 2.5rem;
+    /* background: linear-gradient(135deg, var(--brand-color) 0%, #1e88a8 100%); */
+    background-color: var(--layer-2-um);
+    padding: 2rem;
     border-radius: 12px;
     margin-bottom: 2rem;
     color: white;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 2rem;
+    align-items: center;
+}
+
+.private-header h1,
+.limit-info {
+    line-height: 3rem;
 }
 
 .private-header h1 {
-    margin: 0 0 0.75rem 0;
-    font-size: 2.25rem;
+    margin: 0;
+    /* font-size: 2.25rem; */
+    font-size: 1.875rem;
     font-weight: 600;
 }
 
 .limit-info {
     font-size: 1.25rem;
     font-weight: 600;
-    margin: 0 0 1rem 0;
+    margin: 0;
     opacity: 0.95;
-}
-
-.info-text {
-    margin: 0 0 1.5rem 0;
-    opacity: 0.9;
-    font-size: 1.05rem;
-    line-height: 1.6;
-    max-width: 700px;
-}
-
-.upload-button {
-    display: inline-block;
-    background: white;
-    color: var(--brand-color);
-    padding: 0.875rem 2rem;
-    border-radius: 8px;
-    text-decoration: none;
-    font-weight: 600;
-    font-size: 1rem;
-    transition: all 0.3s ease;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 .upload-button:hover {
@@ -59,7 +52,7 @@
 }
 
 .private-mii-card {
-    background: var(--layer-2);
+    background: var(--layer-2-um);
     border-radius: 12px;
     overflow: hidden;
     transition: all 0.3s ease;
@@ -79,7 +72,10 @@
     position: relative;
     width: 100%;
     aspect-ratio: 1;
-    background: var(--layer-3);
+    background: var(--layer-3-um);
+    --darker-color: color-mix(in oklab, #222 60%, var(--favorite-color) 30%);
+    --lighter-color: color-mix(in oklab, #555 90%, var(--favorite-color) 60%);
+    background: radial-gradient(circle, var(--lighter-color) 26%, var(--darker-color) 100%);
     overflow: hidden;
 }
 
@@ -180,9 +176,9 @@
 .no-miis {
     text-align: center;
     padding: 4rem 2rem;
-    background: var(--layer-2);
+    background: var(--layer-2-um);
     border-radius: 12px;
-    border: 2px dashed var(--layer-3);
+    border: 2px dashed var(--layer-3-um);
 }
 
 .no-miis p {

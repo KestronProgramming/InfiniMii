@@ -1,0 +1,14 @@
+// just using this temporarily, will delete in a moment
+{
+    "compilerOptions": {
+      "checkJs": true,
+      "allowJs": true,
+      "maxNodeModuleJsDepth": 10,
+      "module": "commonjs",
+      "resolveJsonModule": true,
+      "target": "es2022",
+      "strict": false
+    },
+    "exclude": ["node_modules"]
+  }
+  
