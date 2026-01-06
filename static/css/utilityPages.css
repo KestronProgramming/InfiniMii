@@ -7,6 +7,7 @@
     border: 2px solid #202020;
     border-radius: 25px;
     padding: 2rem;
+    min-width: 40vw;
     max-width: 800px;
     margin: 0 auto;
 }

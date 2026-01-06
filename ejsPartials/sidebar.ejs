@@ -17,9 +17,7 @@
         <a href="/qr"><li><span class="emoji">📸</span> QR Options</li></a>
         <a href="/transferInstructions"><li><span class="emoji">📦</span> Transfering Guide</li></a>
         <a href="/amiibo"><li><span class="emoji">🗽</span> Amiibo Tools</li></a>
-        <% if(users[thisUser] && (users[thisUser].roles.includes('researcher') || 
-                          users[thisUser].roles.includes('moderator') ||
-                          users[thisUser].roles.includes('administrator'))) { %>
+        <% if(isOfficial) { %>
             <a href="/manageCategories"><li><span class="emoji">🗂️</span> Manage Categories</li></a>
         <% } %>
     </ul>

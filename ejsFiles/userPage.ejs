@@ -40,8 +40,7 @@
                                 'moderator': 'mod-badge',
                                 'administrator': 'admin-badge'
                             };
-                            userRoles=user.roles || (user.role ? [user.role] : (user.roles.includes('moderator') ? ['moderator'] : [])); %>
-                            <% userRoles.forEach(role=> { %>
+                            <% user.roles.forEach(role=> { %>
                                 <% if(ROLE_DISPLAY[role]) { %>
                                     <span class="<%= roleClass[role] || 'mod-badge' %>">
                                         <%= ROLE_DISPLAY[role] %>
@@ -77,11 +76,7 @@
                 </div>
 
                 <!-- Moderator Tools for Profiles -->
-                <% const currentUserRoles=users[thisUser] ? (users[thisUser].roles || (users[thisUser].role ?
-                    [users[thisUser].role] : (users[thisUser].roles.includes('moderator') ? ['moderator'] :
-                    []))) : []; const canModerateProfile=(currentUserRoles.includes('moderator') ||
-                    currentUserRoles.includes('administrator')) && thisUser!==user.name; %>
-                <% if(canModerateProfile) { %>
+                <% if(isModerator && thisUser !== user.name) { %>
                     <div class="moderator-tools">
                         <div class="mod-tools-header" onclick="toggleModTools()">
                             <h3>🛠️ Moderator Tools</h3>
@@ -91,12 +86,11 @@
                         <div class="mod-tools-content" id="modToolsContent">
                             <div class="mod-tool-grid">
                                 <!-- Change Role (Admin Only) -->
-                                <% if(currentUserRoles.includes('administrator')) { %>
+                                <% if(isAdmin) { %>
                                     <div class="mod-tool-item mod-tool-roles">
                                         <label>User Roles (check multiple):</label>
                                         <div class="role-checkboxes">
-                                            <% const userRoles=user.roles || (user.role ? [user.role] :
-                                                ['basic']); %>
+                                            <% const userRoles=user.roles || (user.role ? [user.role] : ['basic']); %>
                                                 <label class="role-checkbox">
                                                     <input type="checkbox" value="supporter" <%= userRoles.includes('supporter') ? 'checked' : '' %>>
                                                     💖 Supporter
@@ -127,7 +121,7 @@
                                 </div>
 
                                 <!-- Permanent Ban (Admin Only) -->
-                                <% if(users[thisUser].role==='administrator' ) { %>
+                                <% if(isAdmin ) { %>
                                     <div class="mod-tool-item mod-tool-danger">
                                         <label>Permanent Ban (deletes account & all Miis):</label>
                                         <input type="text" id="permBanReason" placeholder="Reason">
@@ -213,8 +207,7 @@
 
         <script src="/global.js"></script>
 
-        <% if(users[thisUser] && (users[thisUser].roles.includes('moderator') ||
-            users[thisUser].roles.includes('administrator'))) { %>
+        <% if(isModerator) { %>
             <script>
                 const targetUsername = '<%= user.name %>';
 
@@ -242,7 +235,8 @@
 
                     try {
                         // Remove all current non-basic roles
-                        const currentRoles = "<%= JSON.stringify(user.roles || (user.role ? [user.role] : ['basic'])) %>";
+                        const currentRoles = "<%= JSON.stringify(user.roles) %>";
+                        // TODO: make sure this works
 
                         // Calculate roles to remove
                         const rolesToRemove = currentRoles.filter(r => r !== 'basic' && !selectedRoles.includes(r));

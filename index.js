@@ -22,6 +22,7 @@ import validator from 'validator';
 process.env = JSON.parse(fs.readFileSync("./env.json", "utf-8"));
 import { connectionPromise, Mii as Miis, User as Users, Settings } from "./database.js";
 
+const defaultMiisPerPage = 15;
 const PRIVATE_MII_LIMIT = process.env.privateMiiLimit;
 const baseUrl = process.env.baseUrl;
 const swearList = englishDataset.containers.map(c => c.metadata.originalWord).filter(Boolean);
@@ -98,7 +99,6 @@ async function getSendables(req, title, user) {
         ? '?' + new URLSearchParams(req.query).toString() 
         : '';
     const settings = await getSettings();
-    const allMiis = await getAllMiis(false);
     const allUsers = await getAllUsers();
 
     // Build information related to the current user
@@ -107,39 +107,35 @@ async function getSendables(req, title, user) {
         const userPfpMii = await getMiiById(req.user.miiPfp, true);
         userPfpMiiColor = userPfpMii.general.favoriteColor;
     }
-    
-    // Build miis object
-    const miisObj = {};
-    allMiis.forEach(mii => miisObj[mii.id] = mii);
-    
-    // Build users object
-    const usersObj = {};
-    allUsers.forEach(user => usersObj[user.username] = user);
-    
+        
     // Ensure default user exists
-    if (!usersObj.Default) {
-        usersObj.Default = {
-            username: "Default",
-            miiPfp: "00000",
-            votedFor: [],
-            submissions: [],
-            roles: []
-        };
-    }
+    // const userObj = req.user;
+    // if (!usersObj.Default) {
+    //     usersObj.Default = {
+    //         username: "Default",
+    //         miiPfp: "00000",
+    //         votedFor: [],
+    //         submissions: [],
+    //         roles: []
+    //     };
+    // }
     
-    const currentUser = req.cookies.username || "Default";
-    const pfp = usersObj[currentUser]?.miiPfp || "00000";
+    const currentUser = req.user?.username || "Default";
+    const pfp = req.user?.miiPfp || "00000";
     
     var send = {
         ...ejsFunctions,
-        miis: miisObj,
-        users: usersObj, // TODO: this needs to not be sent
         highlightedMii: settings.highlightedMii,
         bannedIPs: settings.bannedIPs,
         officialCategories: settings.officialCategories,
         howToTitle: "How To",
         currentPath: currentPath + queryString,
         thisUser: currentUser,
+        user: req.user,
+        isModerator: canModerate(req.user),
+        isOfficial: isOfficial(req.user),
+        isResearcher: isResearcher(req.user),
+        isAdmin: isAdmin(req.user),
         pfp: pfp,
         query: req.query,
         discordInvite: process.env.discordInvite,
@@ -147,6 +143,8 @@ async function getSendables(req, title, user) {
         baseUrl: baseUrl,
         title: title,
         userPfpMiiColor: userPfpMiiColor ?? "#111111",
+        highlightedMiiData: await getMiiById(settings.highlightedMii, false),
+        averageMiiData: await getMiiById("average", false),
     };
 
     send.currentFilter=send.currentFilter||"";
@@ -178,7 +176,7 @@ const ROLE_DISPLAY = {
 
 // Helper functions for role system
 function getUserRoles(user) {
-    if (Array.isArray(user.roles)) {
+    if (Array.isArray(user?.roles)) {
         return user.roles;
     }
     return [ROLES.BASIC];
@@ -197,6 +195,13 @@ function canUploadOfficial(user) {
 function canModerate(user) {
     return hasRole(user, ROLES.MODERATOR) || 
            hasRole(user, ROLES.ADMINISTRATOR);
+}
+
+function isOfficial(user) {
+    return hasRole(user, ROLES.MODERATOR) || 
+        hasRole(user, ROLES.RESEARCHER) ||
+        hasRole(user, ROLES.ADMINISTRATOR);
+
 }
 
 // Permission to edit official Miis
@@ -404,6 +409,28 @@ function shuffleArray(array) {
   return array;
 }
 
+// Seeded random number generator (Mulberry32)
+function seededRandom(seed) {
+    return function() {
+        seed |= 0;
+        seed = seed + 0x6D2B79F5 | 0;
+        var t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+        t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+        return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+}
+
+// Seeded shuffle using Fisher-Yates
+function seededShuffle(array, seed) {
+    const rng = seededRandom(seed);
+    const shuffled = [...array];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(rng() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    return shuffled;
+}
+
 function validate(what) {
     return /^(\d|\D){1,15}$/.test(what);
 }
@@ -438,8 +465,9 @@ async function genId() {
     let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     let attempt = 0;
     let length = 5;
+    let newId;
     while (true) {
-        let newId = "";
+        newId = "";
         for (var i = 0; i < length; i++) {
             newId += chars[Math.floor(Math.random() * chars.length)];
         }
@@ -476,6 +504,170 @@ function wilsonMethod(upvotes, uploadedOn) {
     return hotness;
 }
 
+// Paginated API that queries database directly with skip/limit
+async function paginatedApi(what, page = 1, perPage = defaultMiisPerPage, filter = null) {
+    const skip = (page - 1) * perPage;
+    const settings = await getSettings();
+    
+    let query = { private: false, id: { $ne: "average" } };
+    let sort = {};
+    
+    switch(what) {
+        case "random": { // TODO: this is random, but based on sort order. True random is possible but not deterministically
+
+            const seed = parseInt(filter); // filter contains the seed from the route
+            const totalCount = await Miis.countDocuments(query);
+            
+            const pipeline = [
+                { $match: query },
+                {
+                    $addFields: {
+                        randomSort: {
+                            $mod: [
+                                { $add: [
+                                    { $toLong: "$uploadedOn" },
+                                    seed
+                                ]},
+                                999999
+                            ]
+                        }
+                    }
+                },
+                { $sort: { randomSort: 1 } },
+                { $skip: skip },
+                { $limit: perPage }
+            ];
+            
+            const items = await Miis.aggregate(pipeline);
+            
+            return {
+                items,
+                total: totalCount,
+                page,
+                perPage,
+                totalPages: Math.ceil(totalCount / perPage),
+                seed
+            };
+        }
+        
+        case "top": {// TODO: rebrand to "trending"
+            const now = Date.now();
+
+            const pipeline = [
+                { $match: query },
+                {
+                    $addFields: {
+                        ageHours: {
+                            $divide: [
+                                { $subtract: [now, "$uploadedOn"] },
+                                1000 * 60 * 60
+                            ]
+                        }
+                    }
+                },
+                {
+                    $addFields: {
+                        hotness: {
+                            $divide: [
+                                "$votes",
+                                {
+                                    $pow: [
+                                        { $add: ["$ageHours", 2] },
+                                        1.5
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                },
+                { $sort: { hotness: -1 } },
+                { $skip: skip },
+                { $limit: perPage }
+            ];
+
+            const [items, total] = await Promise.all([
+                Miis.aggregate(pipeline),
+                Miis.countDocuments(query)
+            ]);
+
+            return {
+                items,
+                total,
+                page,
+                perPage,
+                totalPages: Math.ceil(total / perPage)
+            };
+        }
+
+        case "best":
+            sort = { votes: -1 };
+            break;
+        
+        case "recent":
+            sort = { uploadedOn: -1 };
+            break;
+        
+        case "official":
+            query.official = true;
+            if (filter) {
+                query.officialCategories = filter;
+            }
+            sort = { votes: -1 };
+            break;
+        
+        case "search":
+            if (filter) {
+                // Use MongoDB regex for database-level filtering
+                const searchRegex = new RegExp(filter, 'i'); // Case-insensitive regex
+                const searchQuery = {
+                    ...query,
+                    $or: [
+                        { 'meta.name': searchRegex },
+                        { 'desc': searchRegex },
+                        { 'uploader': searchRegex }
+                    ]
+                };
+                
+                const searchTotal = await Miis.countDocuments(searchQuery);
+                const searchItems = await Miis.find(searchQuery)
+                    .sort({ votes: -1 })
+                    .skip(skip)
+                    .limit(perPage)
+                    .lean();
+                
+                return {
+                    items: searchItems,
+                    total: searchTotal,
+                    page,
+                    perPage,
+                    totalPages: Math.ceil(searchTotal / perPage)
+                };
+            }
+            sort = { votes: -1 };
+            break;
+        
+        default:
+            return { items: [], total: 0, page: 1, perPage, totalPages: 0 };
+    }
+    
+    // For simple sorted queries (best, recent, official without category)
+    const totalCount = await Miis.countDocuments(query);
+    const items = await Miis.find(query)
+        .sort(sort)
+        .skip(skip)
+        .limit(perPage)
+        .lean();
+    
+    return {
+        items,
+        total: totalCount,
+        page,
+        perPage,
+        totalPages: Math.ceil(totalCount / perPage)
+    };
+}
+
+// API for things that do not pagination (homepage categories and /api endpoint)
 async function api(what,limit=50,begin=0,fltr){
     const allMiis = await Miis.find({ private: false, id: { $ne: "average" } }).lean();
     const settings = await getSettings();
@@ -484,53 +676,48 @@ async function api(what,limit=50,begin=0,fltr){
     switch(what){
         case "all":
             return allMiis;
-        break;
         case "highlightedMii":
             return await getMiiById(settings.highlightedMii);
-        break;
         case "getMii":
             return await getMiiById(fltr);
-        break;
         case "random":
             newArr = shuffleArray([...allMiis]);
-        break;
+            break;
         case "top":
             newArr = [...allMiis];
             newArr.sort((a, b) => {
                 return wilsonMethod(b.votes, b.uploadedOn) - wilsonMethod(a.votes, a.uploadedOn);
             });
-        break;
+            break;
         case "best":
             newArr = [...allMiis];
             newArr.sort((a, b) => {
                 return b.votes - a.votes;
             });
-        break;
+            break;
         case "recent":
             newArr=[...allMiis];
             newArr.sort((a, b) => {
                 return b.uploadedOn - a.uploadedOn;
             });
-        break;
+            break;
         case "official":
             newArr = allMiis.filter(mii => mii.official);
             newArr.sort((a, b) => {
                 return b.votes - a.votes;
             });
-        break;
+            break;
         case "search":
             fltr = fltr.toLowerCase();
             newArr = allMiis.filter(mii=>{
                 return mii.meta.name.toLowerCase().includes(fltr)||mii.desc.toLowerCase().includes(fltr)||mii.uploader.toLowerCase().includes(fltr);
             });
-            //Needs to sort by relevancy at some point
             newArr.sort((a, b) => {
                 return b.votes - a.votes;
             });
-        break;
+            break;
         default:
-            return `{"okay":false,"error":"No valid type specified"}`
-        break;
+            return `{"okay":false,"error":"No valid type specified"}`;
     }
     return newArr.slice(begin,limit);
 }
@@ -1192,6 +1379,7 @@ site.get('/', async (req, res) => {
         "Recent":{miis:await api("recent",5),link:"./recent"},
         "Official":{miis:await api("official",5),link:"./official"}
     };
+    
     ejs.renderFile(toSend.thisUser.toLowerCase() === "default" ? './ejsFiles/about.ejs' : './ejsFiles/index.ejs', toSend, {}, function (err, str) {
         if (err) {
             res.send(err);
@@ -1204,7 +1392,23 @@ site.get('/', async (req, res) => {
 //The following up to and including /recent are all sorted before being renders in miis.ejs, meaning the file is recycled. / is currently just a clone of /top. /official and /search is more of the same but with a slight change to make Highlighted Mii still work without the full Mii array
 site.get('/random', async (req, res) => {
     let toSend = await getSendables(req);
-    toSend.displayedMiis = await api("random",30);
+    const page = parseInt(req.query.page) || 1;
+    const perPage = 30;
+    
+    // Get or generate seed: use query param if provided, otherwise generate random seed
+    // On page 1 without seed, generate new random seed. On subsequent pages, seed must be passed.
+    const seed = req.query.seed || Math.floor(Math.random() * 1000000).toString();
+    
+    const paginatedData = await paginatedApi("random", page, perPage, seed);
+    toSend.displayedMiis = paginatedData.items;
+    toSend.pagination = {
+        currentPage: paginatedData.page,
+        totalPages: paginatedData.totalPages,
+        total: paginatedData.total,
+        perPage: paginatedData.perPage,
+        seed: paginatedData.seed // Pass seed to template for pagination links
+    };
+    
     toSend.title = "Random Miis - InfiniMii";
     ejs.renderFile('./ejsFiles/miis.ejs', toSend, {}, function(err, str) {
         if (err) {
@@ -1217,7 +1421,17 @@ site.get('/random', async (req, res) => {
 });
 site.get('/top', async (req, res) => {
     let toSend = await getSendables(req);
-    toSend.displayedMiis = await api("top",30);
+    const page = parseInt(req.query.page) || 1;
+    
+    const paginatedData = await paginatedApi("top", page, defaultMiisPerPage);
+    toSend.displayedMiis = paginatedData.items;
+    toSend.pagination = {
+        currentPage: paginatedData.page,
+        totalPages: paginatedData.totalPages,
+        total: paginatedData.total,
+        perPage: paginatedData.perPage
+    };
+    
     toSend.title = "Top Miis - InfiniMii";
     ejs.renderFile('./ejsFiles/miis.ejs', toSend, {}, function(err, str) {
         if (err) {
@@ -1230,7 +1444,17 @@ site.get('/top', async (req, res) => {
 });
 site.get('/best', async (req, res) => {
     let toSend = await getSendables(req);
-    toSend.displayedMiis = await api("best",30);
+    const page = parseInt(req.query.page) || 1;
+    
+    const paginatedData = await paginatedApi("best", page, defaultMiisPerPage);
+    toSend.displayedMiis = paginatedData.items;
+    toSend.pagination = {
+        currentPage: paginatedData.page,
+        totalPages: paginatedData.totalPages,
+        total: paginatedData.total,
+        perPage: paginatedData.perPage
+    };
+    
     toSend.title = "All-Time Top Miis - InfiniMii";
     ejs.renderFile('./ejsFiles/miis.ejs', toSend, {}, function(err, str) {
         if (err) {
@@ -1243,7 +1467,17 @@ site.get('/best', async (req, res) => {
 });
 site.get('/recent', async (req, res) => {
     let toSend = await getSendables(req);
-    toSend.displayedMiis = await api("recent",30);
+    const page = parseInt(req.query.page) || 1;    const perRow = 5;
+    
+    const paginatedData = await paginatedApi("recent", page, defaultMiisPerPage);
+    toSend.displayedMiis = paginatedData.items;
+    toSend.pagination = {
+        currentPage: paginatedData.page,
+        totalPages: paginatedData.totalPages,
+        total: paginatedData.total,
+        perPage: paginatedData.perPage
+    };
+    
     toSend.title = "Recent Miis - InfiniMii";
     ejs.renderFile('./ejsFiles/miis.ejs', toSend, {}, function(err, str) {
         if (err) {
@@ -1257,8 +1491,8 @@ site.get('/recent', async (req, res) => {
 site.get('/official', async (req, res) => {
     let toSend = await getSendables(req);
     
-    // Get all official Miis from DB
-    let officialMiis = await Miis.find({ official: true, private: false }).lean();
+    const page = parseInt(req.query.page) || 1;
+    const filterCategory = req.query.category;
     
     // Get settings for categories
     const settings = await getSettings();
@@ -1278,19 +1512,20 @@ site.get('/official', async (req, res) => {
     // Sort categories by path
     toSend.availableCategories.sort((a, b) => a.path.localeCompare(b.path));
     
-    // Filter by category if specified
-    const filterCategory = req.query.category;
+    // Get paginated official Miis
+    const paginatedData = await paginatedApi("official", page, defaultMiisPerPage, filterCategory);
+    toSend.displayedMiis = paginatedData.items;
+    toSend.pagination = {
+        currentPage: paginatedData.page,
+        totalPages: paginatedData.totalPages,
+        total: paginatedData.total,
+        perPage: paginatedData.perPage
+    };
+    
     if (filterCategory) {
-        officialMiis = officialMiis.filter(mii => 
-            mii.officialCategories && mii.officialCategories.includes(filterCategory)
-        );
         toSend.currentFilter = filterCategory;
     }
     
-    // Sort by votes
-    officialMiis.sort((a, b) => b.votes - a.votes);
-    
-    toSend.displayedMiis = officialMiis;
     toSend.title = filterCategory 
         ? `Official Miis - ${filterCategory} - InfiniMii`
         : "Official Miis - InfiniMii";
@@ -1305,9 +1540,20 @@ site.get('/official', async (req, res) => {
     });
 });
 site.get('/searchResults', async (req, res) => {
-    let toSend = await getSendables(req)
-    toSend.displayedMiis = await api("search",30,0,req.query.q);
-    toSend.title = "Search '" + req.query.q + "' - InfiniMii";
+    let toSend = await getSendables(req);
+    const page = parseInt(req.query.page) || 1;
+    const searchQuery = req.query.q;
+    
+    const paginatedData = await paginatedApi("search", page, defaultMiisPerPage, searchQuery);
+    toSend.displayedMiis = paginatedData.items;
+    toSend.pagination = {
+        currentPage: paginatedData.page,
+        totalPages: paginatedData.totalPages,
+        total: paginatedData.total,
+        perPage: paginatedData.perPage
+    };
+    
+    toSend.title = "Search '" + searchQuery + "' - InfiniMii";
     ejs.renderFile('./ejsFiles/miis.ejs', toSend, {}, function(err, str) {
         if (err) {
             res.send(err);
@@ -2994,10 +3240,24 @@ site.get('/guidelines', async (req, res) => {
     });
 });
 site.get('/signup', async (req, res) => {
-    res.sendFile(path.join(__dirname, "./static/signup.html"));
+    ejs.renderFile('./ejsFiles/signup.ejs', await getSendables(req), {}, function(err, str) {
+        if (err) {
+            res.send(err);
+            console.log(err);
+            return;
+        }
+        res.send(str);
+    });
 });
 site.get('/login', async (req, res) => {
-    res.sendFile(path.join(__dirname, "./static/login.html"));
+    ejs.renderFile('./ejsFiles/login.ejs', await getSendables(req), {}, function(err, str) {
+        if (err) {
+            res.send(err);
+            console.log(err);
+            return;
+        }
+        res.send(str);
+    });
 });
 site.get('/logout', requireAuth, async (req, res) => {
     try {
@@ -4438,3 +4698,5 @@ setInterval(async () => {
         makeReport("**Don't forget to set a new Highlighted Mii!**");
     }
 }, 1000 * 60 * 60);
+
+// TODO: site 500 server

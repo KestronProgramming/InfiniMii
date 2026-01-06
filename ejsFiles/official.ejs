@@ -80,6 +80,24 @@
                             </div>
                         <% } %>
                     </div>
+                    
+                    <!-- Pagination Controls -->
+                    <% if (pagination && pagination.totalPages > 1) { %>
+                        <div class="pagination">
+                            <% if (pagination.currentPage > 1) { %>
+                                <a href="?page=<%= pagination.currentPage - 1 %><%= currentFilter ? '&category=' + encodeURIComponent(currentFilter) : '' %>" class="pagination-btn">← Previous</a>
+                            <% } %>
+                            
+                            <span class="pagination-info">
+                                Page <%= pagination.currentPage %> of <%= pagination.totalPages %> 
+                                (<%= pagination.total %> Miis)
+                            </span>
+                            
+                            <% if (pagination.currentPage < pagination.totalPages) { %>
+                                <a href="?page=<%= pagination.currentPage + 1 %><%= currentFilter ? '&category=' + encodeURIComponent(currentFilter) : '' %>" class="pagination-btn">Next →</a>
+                            <% } %>
+                        </div>
+                    <% } %>
                 <% } else { %>
                     <div class="no-results">
                         <h3>No official Miis found<% if(currentFilter) { %> in <%= currentFilter %><% } %></h3>

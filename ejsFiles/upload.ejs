@@ -93,7 +93,7 @@
                                 <label for="mii-description">Description (Max 250 charactrs):</label>
                                 <textarea maxlength="250" rows="5" placeholder="Description..." name="desc" id="mii-description" required aria-required="true"></textarea>
                                 
-                                <% if(users[thisUser] && (users[thisUser].roles.includes('researcher') || users[thisUser].roles.includes('administrator'))) { %>
+                                <% if(isResearcher) { %>
                                     <div class="official-section">
                                         <input type="checkbox" name="official" id="officialCheckbox" onchange="toggleOfficialFields()"> 
                                         <label for="official">
@@ -341,7 +341,7 @@
                                 <label for="studio-description">Description (Max 250 characters):</label>
                                 <textarea maxlength="250" rows="5" placeholder="Description..." name="desc" id="studio-description" required></textarea>
                                 
-                                <% if(users[thisUser] && (users[thisUser].roles.includes('researcher') || users[thisUser].roles.includes('administrator'))) { %>
+                                <% if(isResearcher) { %>
                                     <div class="official-section">
                                         <input type="checkbox" name="official" id="officialCheckboxStudio" onchange="toggleOfficialFieldsStudio()"> 
                                         <label for="officialCheckboxStudio">

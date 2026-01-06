@@ -280,7 +280,14 @@
     gap: 1rem;
 }
 
-.vote-section > span {
+.like-button,
+.trash-button,
+.report-button {
+    display: flex;
+    gap: 1ch;
+}
+
+/* .vote-section > span {
     display: flex;
     align-items: center;
     gap: 0.5rem;
@@ -294,12 +301,12 @@
 .vote-section > span:hover {
     background-color: var(--brand-color);
     transform: scale(1.05);
-}
+} */
 
 .like-icon {
     width: 28px;
     height: 28px;
-    fill: var(--brand-color);
+    fill: var(--text-1);
     transition: transform 0.3s ease;
 }
 
@@ -307,9 +314,13 @@
     fill: var(--brand-color);
 }
 
-.like-icon:hover {
-    transform: scale(1.2);
+.vote-section > span:hover path {
+    fill: var(--text-1);
 }
+
+/* .like-icon:hover {
+    transform: scale(1.2);
+} */
 
 .vote-count {
     font-size: 18px;
@@ -321,14 +332,9 @@
 .report-icon {
     width: 28px;
     height: 28px;
-    fill: #f00;
+    fill: color-mix(in oklab, var(--text-1) 70%, #ff9999 30%);
     cursor: pointer;
     transition: transform 0.3s ease;
-}
-
-.trash-icon:hover,
-.report-icon:hover {
-    transform: scale(1.2);
 }
 
 /* Responsive Design */

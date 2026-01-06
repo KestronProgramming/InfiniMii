@@ -104,7 +104,7 @@ async function clearIndexes() {
         // process.exit(1);
     }
 }
-clearIndexes();
+// clearIndexes();
 
 export {
     connectionPromise,

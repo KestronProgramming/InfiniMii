@@ -2,9 +2,16 @@
 <html>
 
 <head>
-    <title>Signup - InfiniMii</title>
-    <link rel="stylesheet" href="./global.css">
-    </link>
+    <title>Login - InfiniMii</title>
+    <%- include('metaTags') %>
+    <%- include('structuredData') %>
+    <link href="./global.css" rel="stylesheet">
+    <link href="./index.css" rel="stylesheet">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Preload critical resources -->
+    <link rel="preload" as="image" href="/banner.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="dns-prefetch" href="https://fonts.googleapis.com">
 </head>
 
 <body>
@@ -21,21 +28,11 @@
 				Cool, I'll mess with those soon
         -->
             <ul class="sidebar-list">
-                <a href="/search">
-                    <li>🔍 Search</li>
-                </a>
-                <a href="/top">
-                    <li>📈 Top Miis</li>
-                </a>
-                <a href="/best">
-                    <li>🥇 All-Time Top Miis</li>
-                </a>
-                <a href="/recent">
-                    <li>⏱️ Recent Miis</li>
-                </a>
-                <a href="/official">
-                    <li>🌟 Official Miis</li>
-                </a>
+                <li>🔍 Search</li>
+                <li>📈 Top Miis</li>
+                <li>🥇 All-Time Top Miis</li>
+                <li>⏱️ Recent Miis</li>
+                <li>🌟 Official Miis</li>
             </ul>
             <br>
             <ul class="sidebar-list">
@@ -87,16 +84,10 @@
           </fieldset>
         </form>-->
         </div>
-        <form method="POST" action="/signup">
+        <form method="POST" action="/login">
             <fieldset>
-                <legend>Sign Up</legend>
-                <input placeholder="Username" required name="username" type="text">
-                <input type="password" placeholder="Password" required name="pass">
-                <input placeholder="Email" required name="email" type="email">
-                <!-- TODO: password strength thingy -->
-                <input type="submit"><br>
-                <h6>*Note: It can take up to 10 minutes for the email to propagate, especially for gmail emails. Please
-                    be patient.</h6>
+                <legend>Login</legend>
+                <input placeholder="Username" required name="username" type="text"> <input type="password" placeholder="Password" required name="pass"> <input type="submit">
             </fieldset>
         </form>
     </div>

@@ -1,6 +1,7 @@
 /* Use system fonts for faster loading */
 :root {
     --system-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --user-pfp-mii-color: #ffffff; /* Fallback color if user color is not set */
 }
 
 /* Optimize font loading */
@@ -69,9 +70,11 @@
     --text-1: #fff;
     --text-2: #aaa1a6;
 
-    --layer-1-um: color-mix(in oklab, var(--layer-1) 94%, var(--user-pfp-mii-color) 6%);
-    --layer-2-um: color-mix(in oklab, var(--layer-2) 96%, var(--user-pfp-mii-color) 4%);
-    --layer-3-um: color-mix(in oklab, var(--layer-3) 98%, var(--user-pfp-mii-color) 2%);
+    --derivative-mii-color: color-mix(in oklab, var(--user-pfp-mii-color) 10%, #111111 90%);
+
+    --layer-1-um: color-mix(in oklab, var(--layer-1) 90%, var(--derivative-mii-color) 10%);
+    --layer-2-um: color-mix(in oklab, var(--layer-2) 95%, var(--derivative-mii-color) 5%);
+    --layer-3-um: color-mix(in oklab, var(--layer-3) 95%, var(--derivative-mii-color) 5%);
 }
 
 * {
@@ -79,11 +82,14 @@
 }
 
 body {
-    background-color: var(--layer-1-um);
-    --lighter-color: color-mix(in lab, var(--layer-1) 94%, var(--user-pfp-mii-color) 6%);
-    /* --darker-color: color-mix(in oklab, var(--layer-1) 97%, var(--user-pfp-mii-color) 3%); */
+    background-color: var(--layer-1);
+    --lighter-color: color-mix(in oklab, var(--layer-3) 10%, var(--derivative-mii-color) 90%);
+    --darker-color: color-mix(in oklab, var(--layer-1) 97%, var(--derivative-mii-color) 3%);
     /* background: var(--layer-1) radial-gradient(circle, var(--lighter-color) 15%, var(--darker-color) 100%); */
-    background: var(--layer-1) radial-gradient(circle, var(--lighter-color) 15%, var(--layer-1-um) 100%);
+    /* background: var(--layer-1) radial-gradient(circle, var(--lighter-color) 20%, var(--layer-1-um) 80%); */
+    background-image:
+        radial-gradient(ellipse at center, var(--derivative-mii-color) 20%, var(--darker-color) 80%),
+        radial-gradient(ellipse at bottom, var(--lighter-color), var(--darker-color) 80%);
     color: var(--text-1);
     margin: 0;
     font: 400 16px / 1.75 Poppins, sans-serif;
@@ -267,10 +273,18 @@ footer ul li a:hover {
 .mii-card {
     display: flex;
     flex-flow: column;
-    width: 200px;
+    width: clamp(10rem, 12vw, 40rem);
     border: 2px solid #202020;
     border-radius: 25px;
     background-color: var(--layer-2-um);
+    --lighter-color: color-mix(in oklab, var(--layer-3) 10%, var(--derivative-mii-color) 90%);
+    --darker-color: color-mix(in oklab, var(--layer-1) 97%, var(--derivative-mii-color) 3%);
+    /* background: var(--layer-1) radial-gradient(circle, var(--lighter-color) 15%, var(--darker-color) 100%); */
+    /* background: var(--layer-1) radial-gradient(circle, var(--lighter-color) 20%, var(--layer-1-um) 80%); */
+    background-image:
+        radial-gradient(ellipse at center, var(--darker-color) 20%, var(--derivative-mii-color) 80%),
+        radial-gradient(ellipse at bottom, var(--darker-color), var(--lighter-color) 80%);
+    background-attachment: fixed;
     transition: transform 0.3s ease, box-shadow 0.3s ease;
 }
 
@@ -774,3 +788,45 @@ fieldset a:hover {
 @media (max-width: 800px) {
     .site-footer .footer-section h3 { margin-bottom: 0.6rem; }
 }
+
+/* Pagination Styles */
+.pagination {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 1rem;
+    margin: 2rem 0;
+    padding: 1rem;
+}
+
+.pagination-btn {
+    padding: 0.5rem 1rem;
+    background: #333;
+    color: white;
+    text-decoration: none;
+    border-radius: 4px;
+    transition: background 0.2s;
+    font-weight: 500;
+}
+
+.pagination-btn:hover {
+    background: #555;
+}
+
+.pagination-info {
+    color: #ccc;
+    font-size: 0.9rem;
+}
+
+@media (max-width: 600px) {
+    .pagination {
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+    
+    .pagination-btn {
+        width: 100%;
+        text-align: center;
+    }
+}
+
