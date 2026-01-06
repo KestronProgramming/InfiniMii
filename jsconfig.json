@@ -1,13 +1,16 @@
 // just using this temporarily, will delete in a moment
 {
     "compilerOptions": {
-      "checkJs": true,
+      "checkJs": false,
       "allowJs": true,
-      "maxNodeModuleJsDepth": 10,
+      "maxNodeModuleJsDepth": 3,
       "module": "commonjs",
       "resolveJsonModule": true,
       "target": "es2022",
-      "strict": false
+      "strict": false,
+    },
+    "typeAcquisition": {
+      "enable": false
     },
     "exclude": ["node_modules"]
   }

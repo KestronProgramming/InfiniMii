@@ -13,6 +13,7 @@
     "@types/node": "^18.0.6",
     "compression": "^1.8.1",
     "cookie-parser": "^1.4.6",
+    "double-metaphone": "^2.0.1",
     "ejs": "^3.1.9",
     "express": "^4.18.2",
     "form-data": "^4.0.4",
@@ -22,7 +23,9 @@
     "mongoose": "^9.1.1",
     "multer": "^1.4.5-lts.1",
     "nodemailer": "^7.0.12",
+    "obscenity": "^0.4.5",
     "path": "^0.12.7",
-    "prettier": "^2.8.8"
+    "prettier": "^2.8.8",
+    "validator": "^13.15.26"
   }
 }

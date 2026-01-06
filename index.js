@@ -10,12 +10,16 @@ const cookieParser = require('cookie-parser');
 const compression = require('compression');
 const { connectionPromise, Mii: Miis, User: Users, Settings } = require("./database");
 var multer = require('multer');
-const { userInfo } = require("os");
 var upload = multer({ dest: 'uploads/' });
 var globalSalt = process.env.salt;
 process.env=require("./env.json");
 const PRIVATE_MII_LIMIT = process.env.privateMiiLimit;
 const baseUrl=process.env.baseUrl;
+const { RegExpMatcher, englishDataset, englishRecommendedTransformers } = require('obscenity');
+const swearList = englishDataset.containers.map(c => c.metadata.originalWord).filter(Boolean);
+const { doubleMetaphone } = require('double-metaphone');
+const validator = require('validator');
+
 
 function bitStringToBuffer(bitString) {
   const byteLength = Math.ceil(bitString.length / 8);
@@ -68,7 +72,6 @@ async function getAllUsers() {
     return await Users.find({}).lean();
 }
 //#endregion
-
 
 const ejsFunctions = {
     "decodeColor": (colorIndex) => (["Red", "#dd5e17", "#e2cd5e", "Lime", "Green", "Blue", "Cyan", "#e65ba1", "Purple", "Brown", "White", "Black"][colorIndex] || colorIndex)
@@ -391,19 +394,53 @@ function validate(what) {
     return /^(\d|\D){1,15}$/.test(what);
 }
 
-//Possibly able to generate 9 Billion IDs before needing a new character, which I doubt we'll ever hit
+const swearMatcher = new RegExpMatcher({
+    ...englishDataset.build(),
+    ...englishRecommendedTransformers, // Full leet-speak detection
+});
+const badPhonetics = new Set(
+    swearList.flatMap(w => doubleMetaphone(w).filter(Boolean))
+);
+
+/** Loose filter check that filters if it sounds phonetically similar to any bad word */
+function soundsBad(str) {
+    // Strict profanity check with full leet-speak
+    if (swearMatcher.hasMatch(str)) return true;
+
+    // Remove non-alphabetic for phonetic analysis
+    const cleanStr = str.replace(/[^a-zA-Z]/g, '');
+    if (cleanStr.length === 0) return false;
+    
+    const phonetics = doubleMetaphone(cleanStr);
+    return phonetics.some(p => p && badPhonetics.has(p));
+}
+
+/** Check input against the filter explicitly including leetspeek */
+function isBad(str) {
+    return swearMatcher.hasMatch(str);
+}
+
 async function genId() {
-    let ret = "";
     let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    let exists = true;
-    while (exists || ret === "") {
-        ret = "";
-        for (var i = 0; i < 5; i++) {
-            ret += chars[Math.floor(Math.random() * chars.length)];
+    let attempt = 0;
+    let length = 5;
+    while (true) {
+        let newId = "";
+        for (var i = 0; i < length; i++) {
+            newId += chars[Math.floor(Math.random() * chars.length)];
         }
-        exists = await Miis.exists({ id: ret });
+        let exists = await Miis.exists({ id: newId });
+        let isProfane = soundsBad(newId) && attempt < 30; // prevent broken filter from hanging app
+
+        if (!exists && !isProfane) break; // Stop once we find a suitable ID
+
+        // If no ID is found several times in a row, increase the length.
+        attempt++;
+        if (attempt % 5 === 0) {
+            length += 1;
+        }
     }
-    return ret;
+    return newId;
 }
 
 function wilsonMethod(upvotes, uploadedOn) {
@@ -791,7 +828,7 @@ site.use(express.urlencoded({ extended: true }));
 site.use(express.static(path.join(__dirname + '/static')));
 site.use(cookieParser());
 site.use('/favicon.ico', express.static('static/favicon.png'));
-  
+
 
 //#region Middleware
 
@@ -4276,42 +4313,54 @@ site.post('/convertMii', upload.single('mii'), async (req, res) => {
     }
 });
 site.post('/signup', async (req, res) => {
-    // TODO: prevent email exploits
-    // TODO: it is allowing multiple signups under same email rn
+    // TODO: JWT model
 
-    const existingUser = await getUserByUsername(req.body.username);
-    if (existingUser || !validate(req.body.username)) {
+    // Field validation
+    if (!validator.isEmail(req.body.email)) {
+        res.send("Invalid email address");
+        return;
+    }
+    const cleanEmail = validator.normalizeEmail(req.body.email);
+
+    // Validate username
+    const existingUsername = await getUserByUsername(req.body.username);
+    if (isBad(req.body.username) || existingUsername || !validate(req.body.username)) {
         res.send("Username Invalid");
+        return;
+    }
+
+    // Account does not already exist
+    const existingUserEmail = await Users.exists({ email: cleanEmail })
+    if (existingUserEmail) {
+        res.send("Email already in use");
         return;
     }
     
     // Check IP ban
-    const clientIP = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+    const clientIP = req.headers['x-forwarded-for'] || req.connection.remoteAddress; // TODO: ban bypass exploit
     const ipHash = hashIP(clientIP);
     const settings = await getSettings();
     if (settings.bannedIPs.includes(ipHash)) {
         return res.send('This IP address has been permanently banned from creating accounts.');
     }
     
-    var hashed = hashPassword(req.body.pass);
+    var hashedPassword = hashPassword(req.body.pass);
     var token = genToken();
     
     await Users.create({
         username: req.body.username,
-        salt: hashed.salt,
-        pass: hashed.hash,
-        verificationToken: hashPassword(token, hashed.salt).hash,
+        salt: hashedPassword.salt,
+        pass: hashedPassword.hash,
+        verificationToken: hashPassword(token, hashedPassword.salt).hash,
         creationDate: Date.now(),
-        email: req.body.email,
-        votedFor: [],
-        submissions: [],
-        privateMiis: [],
-        miiPfp: "00000",
-        roles: [ROLES.BASIC],
+        email: cleanEmail,
+        roles: [ ROLES.BASIC ],
     });
     
     let link = "https://infinimii.com/verify?user=" + encodeURIComponent(req.body.username) + "&token=" + encodeURIComponent(token);
-    sendEmail(req.body.email, "InfiniMii Verification", "Welcome to InfiniMii! Please verify your email by clicking this link: " + link);
+    sendEmail(cleanEmail, "InfiniMii Verification", 
+        "Welcome to InfiniMii! Please verify your email by clicking this link: " + link
+    );
     res.send("Check your email to verify your account!");
 });
 site.post('/login', async (req, res) => {
