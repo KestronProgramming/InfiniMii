@@ -18,6 +18,7 @@ import https from 'https';
 import { RegExpMatcher, englishDataset, englishRecommendedTransformers } from 'obscenity';
 import { doubleMetaphone } from 'double-metaphone';
 import validator from 'validator';
+import jwt from 'jsonwebtoken';
 
 process.env = JSON.parse(fs.readFileSync("./env.json", "utf-8"));
 import { connectionPromise, Mii as Miis, User as Users, Settings } from "./database.js";
@@ -261,6 +262,17 @@ function removeRole(user, role) {
 }
 //#endregion
 
+function createToken(user) {
+    const payload = {
+        username: user.username,
+        email: user.email,
+        tokenVersion: user.tokenVersion || 0
+    };
+    return jwt.sign(payload, process.env.JWT_SECRET || "beta_testing_only_secret", { 
+        expiresIn: '30d',
+        algorithm: 'HS256'
+    });
+}
 
 // Find a category node by path
 function findCategoryByPath(path, tree) {
@@ -737,6 +749,7 @@ function validatePassword(password, salt, hash) {
     return hashPassword(password, salt).hash === hash;
 }
 
+/** Generate cryptographically secure token used to verify email is accessible */
 function genToken(length = 15) {
     const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     const bytes = crypto.randomBytes(length);
@@ -1083,30 +1096,41 @@ site.use((req, res, next) => {
     next();
 });
 
-// Auth middleware
+// Auth middleware (using JWTs)
 site.use(async (req, res, next) => {
-    // Set req.user if logged in
-    const user = await getUserByUsername(req.cookies.username);
-    if (user) {
-        if (!validatePassword(req.cookies.token, user.salt, user.token)) {
-            // Clear invalid info
-            res.clearCookie('username');
-            res.clearCookie('token');
-            res.redirect("/");
-            return;
-        }
-        else {
-            // Set DB user
-            req.user = await Users.findOne({ username: user.username });
-            next();
-        }
-        return;
+    const token = req.cookies.token;
+    if (!token) {
+        return next(); // Not logged in, keep req.user undefined
     }
-    else {
-        // Not logged in, can proceed. Authed endpoints check req.user exists
+
+    try {
+        const payload = jwt.verify(token, process.env.JWT_SECRET || "beta_testing_only_secret", { // TODO REMOVE
+            algorithms: ['HS256']
+        });
+        const user = await Users.findOne({ 
+            username: payload.username,
+            email: payload.email,
+            tokenVersion: payload.tokenVersion
+        });
+        // TODO: exploit where you change your username/email, and old token can still access it....
+        // SOLUTION: on email/username change, increase token version
+
+        // Optional: check token version to allow invalidation
+        if (!user) {
+            res.clearCookie('token');
+            res.clearCookie('username');
+            return next();
+        }
+
+        req.user = user; // attach full DB user
+        next();
+    } catch (err) {
+        // jwt.verify failed, clear.
+        res.clearCookie('token');
+        res.clearCookie('username');
         next();
     }
-});
+})
 
 // Ban middleware
 site.use(async (req, res, next) => {
@@ -1626,7 +1650,7 @@ site.get('/api', async (req, res) => {
         res.send(`{"okay":false,"error":"Invalid arguments"}`);
     }
 });
-site.get('/verify', async (req, res) => { // TODO: verify auth middleware did not break
+site.get('/verify', async (req, res) => {
     try {
         const user = await getUserByUsername(req.query.user);
         if (!user) {
@@ -1635,21 +1659,29 @@ site.get('/verify', async (req, res) => { // TODO: verify auth middleware did no
         }
         
         if (validatePassword(req.query.token, user.salt, user.verificationToken)) {
-            let token = genToken();
-            
             await Users.findOneAndUpdate(
                 { username: req.query.user },
                 { 
                     $unset: { verificationToken: "" },
                     $set: { 
-                        token: hashPassword(token, user.salt).hash,
                         verified: true 
                     }
                 }
             );
             
-            await res.cookie("username", req.query.user, { maxAge: 30 * 24 * 60 * 60 * 1000/*1 Month*/ });
-            await res.cookie("token", token, { maxAge: 30 * 24 * 60 * 60 * 1000/*1 Month*/ });
+            // Get updated user and create JWT
+            const updatedUser = await getUserByUsername(req.query.user);
+            const jwtToken = createToken(updatedUser);
+            
+            res.cookie("username", req.query.user, { 
+                maxAge: 30 * 24 * 60 * 60 * 1000 // 1 Month
+            });
+            res.cookie("token", jwtToken, { 
+                maxAge: 30 * 24 * 60 * 60 * 1000, // 1 Month
+                httpOnly: true,
+                secure: process.env.NODE_ENV === 'production',
+                sameSite: 'lax'
+            });
             res.redirect("/");
         }
         else {
@@ -3468,7 +3500,7 @@ site.get('/changeHighlightedMii', requireAuth, requireRole(ROLES.MODERATOR), asy
         res.send(`{"okay":false,"msg":"Invalid Mii ID"}`);
     }
 });
-site.get('/reportMii', async (req,res)=>{
+site.get('/reportMii', async (req,res)=>{ // TODO: add endpoints that cause stuff should be POST, not GET to prevent CSRF
     const mii = await getMiiById(req.query.id, false);
     makeReport(JSON.stringify({
         embeds: [{
@@ -3560,13 +3592,17 @@ site.post('/changeEmail', requireAuth, async (req, res) => {
         var token = genToken();
         let link = "https://infinimii.com/verify?user=" + encodeURIComponent(req.cookies.username) + "&token=" + encodeURIComponent(token);
         
+        // Increment token version to invalidate old JWTs (security - email is in JWT payload)
+        const newTokenVersion = (req.user.tokenVersion || 0) + 1;
+        
         await Users.findOneAndUpdate(
             { username: req.cookies.username },
             { 
                 $set: { 
                     email: newEmail,
                     verified: false,
-                    verificationToken: hashPassword(token, req.user.salt).hash
+                    verificationToken: hashPassword(token, req.user.salt).hash,
+                    tokenVersion: newTokenVersion
                 }
             }
         ); // TODO_DB: this would brick your account if you send to a false email...
@@ -3611,20 +3647,28 @@ site.post('/changePassword', requireAuth, async (req, res) => {
         // Hash new password with existing salt
         const newHashed = hashPassword(newPassword, req.user.salt);
 
-        // Generate new token and update cookie
-        const newToken = genToken();
-        const newTokenHash = hashPassword(newToken, req.user.salt).hash;
+        // Increment token version to invalidate old tokens
+        const newTokenVersion = (req.user.tokenVersion || 0) + 1;
 
         await Users.findOneAndUpdate(
             { username: req.cookies.username },
             { 
                 pass: newHashed.hash,
-                token: newTokenHash
+                tokenVersion: newTokenVersion
             }
         );
 
-        // Set new token cookie
-        res.cookie("token", newToken, { maxAge: 30 * 24 * 60 * 60 * 1000 });
+        // Get updated user and create new JWT
+        const updatedUser = await getUserByUsername(req.cookies.username);
+        const newToken = createToken(updatedUser);
+
+        // Set new JWT token cookie
+        res.cookie("token", newToken, { 
+            maxAge: 30 * 24 * 60 * 60 * 1000,
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax'
+        });
 
         makeReport(JSON.stringify({
             embeds: [{
@@ -3651,7 +3695,7 @@ site.post('/changePassword', requireAuth, async (req, res) => {
 });
 
 // Delete All User's Miis (User - own miis only)
-site.post('/deleteAllMyMiis', requireAuth, async (req, res) => { // TODO: verify no CSRF
+site.post('/deleteAllMyMiis', requireAuth, async (req, res) => {
     try {
         const miiIds = [...req.user.submissions];
         let deletedCount = 0;
@@ -4668,20 +4712,25 @@ site.post('/signup', async (req, res) => {
 });
 site.post('/login', async (req, res) => {
     const user = await getUserByUsername(req.body.username);
-    if (!user) { // TODO: validate this is right... this is just checking username
+    if (!user) {
         res.send("Invalid username or password");
         return;
     }
     
     if (validatePassword(req.body.pass, user.salt, user.pass)) {
         if (user.verified) {
-            var token = genToken();
-            await Users.findOneAndUpdate(
-                { username: req.body.username },
-                { $set: { token: hashPassword(token, user.salt).hash } }
-            );
-            res.cookie('token', token, { maxAge: 30 * 24 * 60 * 60 * 1000/*1 Month*/ });
-            res.cookie('username', req.body.username, { maxAge: 30 * 24 * 60 * 60 * 1000/*1 Month*/ });
+            // Create JWT token
+            const token = createToken(user);
+            
+            res.cookie('token', token, {
+                maxAge: 30 * 24 * 60 * 60 * 1000, // 1 Month
+                httpOnly: true, // Prevent XSS leaking - TODO: changing username should require password because it should return a JWT with a version increase
+                secure: process.env.NODE_ENV === 'production', // HTTPS only in production
+                sameSite: 'lax' // CSRF protection
+            });
+            res.cookie('username', req.body.username, { 
+                maxAge: 30 * 24 * 60 * 60 * 1000 
+            });
         }
         else {
             res.send("Email not verified yet");
@@ -4700,3 +4749,10 @@ setInterval(async () => {
 }, 1000 * 60 * 60);
 
 // TODO: site 500 server
+
+// TODO: reset password
+
+// TODO: "Check your email to verify your account!" should be feedback on the site, not a new page
+
+// TODO: user page is broken
+

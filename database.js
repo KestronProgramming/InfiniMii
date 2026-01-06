@@ -53,12 +53,13 @@ const userSchema = new mongoose.Schema({
     submissions: { type: [String], default: [] }, // TODO_DB: remove this
     miiPfp: { type: String, default: "00000" },
     roles: { type: [String], default: ["basic"] },
-    token: String,
+    // token: String, // Deprecated in favor of JWTs
     verified: { type: Boolean, default: false },
     privateMiis: { type: [String], default: [] },
     isBanned: { type: Boolean, default: false },
     banExpires: Number,
-    banReason: String
+    banReason: String,
+    tokenVersion: { type: Number, default: 0 }, // Don't accept JWTs older than this
 }, { timestamps: true, minimize: false });
 
 const settingsSchema = new mongoose.Schema({
