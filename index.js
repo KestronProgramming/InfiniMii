@@ -25,7 +25,14 @@ import { connectionPromise, Mii as Miis, User as Users, Settings } from "./datab
 const PRIVATE_MII_LIMIT = process.env.privateMiiLimit;
 const baseUrl = process.env.baseUrl;
 const swearList = englishDataset.containers.map(c => c.metadata.originalWord).filter(Boolean);
-const upload = multer({ dest: 'uploads/' });
+const upload = multer({
+    dest: './uploads/',
+    filename: (req, file, cb) => {
+        const ext = file.originalname.split('.').pop(); // keep extension
+        const hash = crypto.randomBytes(16).toString('hex');
+        cb(null, `${hash}.${ext}`);
+    }
+});
 var globalSalt = process.env.salt;
 
 function bitStringToBuffer(bitString) {
@@ -378,8 +385,8 @@ function getAllDescendantPaths(node, result = []) {
     return result;
 }
 
-function hashIP(ip) {
-    return crypto.createHash('sha256').update(`${ip}${globalSalt}`).digest('hex');
+function sha256(str) {
+    return crypto.createHash('sha256').update(`${str}${globalSalt}`).digest('hex');
 }
 
 function isVPN(ip) {
@@ -858,6 +865,9 @@ const site = express();
 site.use(express.json());
 site.use(express.urlencoded({ extended: true }));
 site.use(express.static(path.join(__dirname + '/static')));
+site.use(express.static(path.join(__dirname + '/static/css')));
+site.use(express.static(path.join(__dirname + '/static/js')));
+site.use(express.static(path.join(__dirname + '/static/assets')));
 site.use(cookieParser());
 site.use('/favicon.ico', express.static('static/favicon.png'));
 
@@ -918,7 +928,7 @@ site.use(async (req, res, next) => {
         if (req.user) {
             // Check IP ban
             const clientIP = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
-            const ipHash = hashIP(clientIP);
+            const ipHash = sha256(clientIP);
             const settings = await getSettings();
             if (settings.bannedIPs.includes(ipHash)) {
                 res.clearCookie('username');
@@ -1830,7 +1840,7 @@ site.post('/permBanUser', requireAuth, requireRole(ROLES.ADMINISTRATOR), async (
         
         // Ban IP if not VPN
         if (!isVPN(clientIP)) {
-            const ipHash = hashIP(clientIP);
+            const ipHash = sha256(clientIP);
             const settings = await getSettings();
             if (!settings.bannedIPs.includes(ipHash)) {
                 await updateSettings({ $addToSet: { bannedIPs: ipHash } });
@@ -4296,6 +4306,7 @@ site.post('/blockMiiFromPublishing', requireAuth, requireRole(ROLES.MODERATOR), 
 site.post('/convertMii', upload.single('mii'), async (req, res) => {
     // TODO: Verify that mii.name is valid here
     try {
+        let tempMiiPath = crypto.randomBytes(16).toString('hex'); // TODO: verify convertMii features work after path changes
         let mii;
         if (req.body.fromType === "3DS/Wii U") {
             mii = await miijs.read3DSQR("./uploads/" + req.file.filename);
@@ -4320,21 +4331,21 @@ site.post('/convertMii', upload.single('mii'), async (req, res) => {
         }
         try { fs.unlinkSync("./uploads/" + req.file.filename); } catch (e) { }
         if (req.body.toType.includes("Wii Mii")) {
-            await miijs.writeWiiBin(mii, "./" + mii.name + ".mii");
+            await miijs.writeWiiBin(mii, "./" + tempMiiPath + ".mii");
             res.setHeader('Content-Disposition', `attachment; filename="${mii.name}.mii"`);
-            await res.sendFile("./" + mii.name + ".mii", { root: path.join(__dirname, "./") });
+            await res.sendFile("./" + tempMiiPath + ".mii", { root: path.join(__dirname, "./") });
             setTimeout(() => {
-                fs.unlinkSync("./" + mii.name + ".mii");
+                fs.unlinkSync("./" + tempMiiPath + ".mii");
             }, 2000);
             return;
         }
         if (req.body.toType.includes("3DS")) {
-            await miijs.write3DSQR(mii, "./static/converted/" + mii.name + ".png");
+            await miijs.write3DSQR(mii, "./static/converted/" + tempMiiPath + ".png");
             setTimeout(() => {
-                res.redirect("/converted/" + mii.name + ".png");
+                res.redirect("/converted/" + tempMiiPath + ".png");
             }, 5000);
             setTimeout(() => {
-                fs.unlinkSync("./static/converted/" + mii.name + ".png");
+                fs.unlinkSync("./static/converted/" + tempMiiPath + ".png");
             }, 10000);
             return;
         }
@@ -4370,7 +4381,7 @@ site.post('/signup', async (req, res) => {
     
     // Check IP ban
     const clientIP = req.headers['x-forwarded-for'] || req.connection.remoteAddress; // TODO: ban bypass exploit
-    const ipHash = hashIP(clientIP);
+    const ipHash = sha256(clientIP);
     const settings = await getSettings();
     if (settings.bannedIPs.includes(ipHash)) {
         return res.send('This IP address has been permanently banned from creating accounts.');
