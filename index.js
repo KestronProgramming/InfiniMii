@@ -1180,9 +1180,6 @@ site.use(compression({
 
 //#endregion
 
-
-//#region Static handling
-
 // Patch ejs renderFile to resolve the ejsPartials at root, making includes shorter
 ejs.renderFile = ((orig) => {
     return function (file, data, opts = {}, cb) {
@@ -1201,6 +1198,21 @@ ejs.renderFile = ((orig) => {
         );
     };
 })(ejs.renderFile)
+
+function renderEjs(file, inp) {
+    return new Promise((resolve, reject) => {
+        ejs.renderFile(file, inp, {}, function(err, str) {
+            if (err) {
+                reject(err);
+            } else {
+                resolve(str);
+            }
+        });
+    });
+}
+
+//#region Static handling
+
   
 // Serve private Mii images with authentication
 site.use('/privateMiiImgs', async (req, res, next) => {
@@ -1717,9 +1729,7 @@ site.get('/deleteMii', async (req, res) => {
         }
         
         // Check permissions
-        const canDelete = req.user.submissions.includes(miiId) || 
-                         (req.user.privateMiis && req.user.privateMiis.includes(miiId)) || 
-                         isModerator;
+        const canDelete = mii.uploader === req.user.username || isModerator;
         
         if (!canDelete) {
             res.json({error: "Permission denied"});
@@ -1776,17 +1786,6 @@ site.get('/deleteMii', async (req, res) => {
                 }
             }]
         }), attachments);
-        
-        // Remove from user's submissions/privateMiis
-        await Users.findOneAndUpdate(
-            { username: mii.uploader },
-            { 
-                $pull: { 
-                    submissions: miiId,
-                    privateMiis: miiId
-                }
-            }
-        );
         
         // Delete from database
         await Miis.findOneAndDelete({ id: miiId });
@@ -2778,12 +2777,6 @@ site.post('/uploadExtractedAmiibo', async (req, res) => {
         mii.published = false;
         mii.blockedFromPublishing = false;
         
-        // Add to user's private Miis
-        await Users.findOneAndUpdate(
-            { username: req.user.username },
-            { $push: { privateMiis: newMiiId } }
-        );
-        
         // Store in database as private Mii
         await Miis.create({
             ...mii,
@@ -2905,12 +2898,6 @@ site.post('/uploadStudioMii', requireAuth, async (req, res) => {
         const miiImageData = await miijs.renderMii(mii);
         fs.writeFileSync("./static/privateMiiImgs/" + mii.id + ".png", miiImageData);
         await miijs.write3DSQR(mii, "./static/privateMiiQRs/" + mii.id + ".png");
-        
-        // Add to user's private Miis
-        await Users.findOneAndUpdate(
-            { username: uploader },
-            { $push: { privateMiis: mii.id } }
-        );
         
         // Store in database as private Mii
         await Miis.create({
@@ -3127,7 +3114,12 @@ site.post('/voteMii', requireAuth, async (req, res) => {
         return;
     }
     try {
-        if (req.user.submissions.includes(req.query.id)) {
+        const mii = await getMiiById(req.query.id, false);
+        if (!mii) {
+            res.json({error: "Mii not found"});
+            return;
+        }
+        if (mii.uploader === req.user.username) {
             res.json({error: "You submitted this Mii"});
             return;
         }
@@ -3168,8 +3160,10 @@ site.get('/mii/:id', async (req, res) => {
     const mii = await getMiiById(miiId, true);
     
     if (!mii) {
-        res.status(404).send("Mii not found");
-        return;
+        return res.status(404).send(await renderEjs("./ejsFiles/error.ejs", {
+            message: "404 Mii not found",
+            ...(await getSendables(req))
+        }));
     }
     
     // Check access for private Miis
@@ -3210,7 +3204,11 @@ site.get('/user/:username', async (req, res) => {
     const targetUser = await getUserByUsername(targetUsername);
     
     if (!targetUser) {
-        return res.status(404).send('User not found');
+        res.send(await renderEjs("./ejsFiles/error.ejs", {
+            message: "User not found",
+            ...(await getSendables(req))
+        }));
+        return;
     }
     if (targetUsername === "Nintendo") { // a s'ti mret hcraes a ton si odnetniN ,tnavelerrI :nortseK
         res.redirect('/official');
@@ -3222,7 +3220,7 @@ site.get('/user/:username', async (req, res) => {
     inp.displayedMiis = [];
     
     // Get all user's submissions
-    const miis = await Miis.find({ id: { $in: targetUser.submissions }, private: false }).lean();
+    const miis = await Miis.find({ uploader: targetUsername, private: false, published: true }).lean();
     inp.displayedMiis = miis;
     
     ejs.renderFile('./ejsFiles/userPage.ejs', inp, {}, function(err, str) {
@@ -3342,8 +3340,7 @@ site.get('/settings', async (req, res) => {
 site.get('/myPrivateMiis', requireAuth, async (req, res) => {
     var toSend = await getSendables(req, undefined, req.user);
     
-    const privateMiisArray = req.user.privateMiis || [];
-    const privateMiis = await Miis.find({ id: { $in: privateMiisArray }, private: true }).lean();
+    const privateMiis = await Miis.find({ uploader: req.user.username, private: true }).lean();
     
     toSend.privateMiis = privateMiis;
     toSend.privateLimit = PRIVATE_MII_LIMIT;
@@ -3390,6 +3387,7 @@ site.get('/changePfp', requireAuth, async (req, res) => {
 });
 site.get('/changeUser', requireAuth, async (req, res) => {    
     const newUsername = req.query.newUser;
+    const oldUsername = req.cookies.username;
     const existingUser = await getUserByUsername(newUsername);
     
     if (validate(newUsername) && !existingUser) {
@@ -3700,7 +3698,8 @@ site.post('/changePassword', requireAuth, async (req, res) => {
 // Delete All User's Miis (User - own miis only)
 site.post('/deleteAllMyMiis', requireAuth, async (req, res) => {
     try {
-        const miiIds = [...req.user.submissions];
+        const miis = await Miis.find({ uploader: req.user.username, private: false, published: true }).lean();
+        const miiIds = miis.map(m => m.id);
         let deletedCount = 0;
 
         for (const miiId of miiIds) {
@@ -3719,11 +3718,6 @@ site.post('/deleteAllMyMiis', requireAuth, async (req, res) => {
                 console.error(`Error deleting Mii ${miiId}:`, e);
             }
         }
-
-        await Users.findOneAndUpdate(
-            { username: req.cookies.username },
-            { submissions: [] }
-        );
 
         makeReport(JSON.stringify({
             embeds: [{
@@ -3774,7 +3768,6 @@ site.post('/deleteAccount', requireAuth, async (req, res) => {
                 creationDate: Date.now(),
                 email: "",
                 votedFor: [],
-                submissions: [],
                 miiPfp: "00000",
                 roles: [ROLES.BASIC],
             });
@@ -3784,11 +3777,6 @@ site.post('/deleteAccount', requireAuth, async (req, res) => {
         await Miis.updateMany(
             { uploader: username },
             { uploader: "[Deleted User]" }
-        );
-        
-        await Users.findOneAndUpdate(
-            { username: "[Deleted User]" },
-            { $push: { submissions: { $each: req.user.submissions } } }
         );
 
         // Delete user account
@@ -3812,7 +3800,7 @@ site.post('/deleteAccount', requireAuth, async (req, res) => {
                     },
                     {
                         name: 'Miis Transferred',
-                        value: req.user.submissions.length.toString(),
+                        value: (await Miis.countDocuments({ uploader: username })).toString(),
                         inline: true
                     }
                 ]
@@ -3863,8 +3851,8 @@ site.post('/uploadMii', requireAuth, upload.single('mii'), async (req, res) => {
         let uploader = req.user.username;
         
         // Check private Mii limit
-        if (!req.user.privateMiis) user.privateMiis = [];
-        if (req.user.privateMiis.length >= Number(PRIVATE_MII_LIMIT)) {
+        const privateMiisCount = await Miis.countDocuments({ uploader: req.user.username, private: true });
+        if (privateMiisCount >= Number(PRIVATE_MII_LIMIT)) {
             res.json({error: `You have reached the limit of ${PRIVATE_MII_LIMIT} private Miis. Please publish or delete some before uploading more.`});
             try { fs.unlinkSync("./uploads/" + req.file.filename); } catch (e) { }
             return;
@@ -3961,12 +3949,6 @@ site.post('/uploadMii', requireAuth, upload.single('mii'), async (req, res) => {
         const miiImageData=await miijs.renderMii(mii);
         fs.writeFileSync("./static/privateMiiImgs/" + mii.id + ".png", miiImageData);
         await miijs.write3DSQR(mii, "./static/privateMiiQRs/" + mii.id + ".png");
-        
-        // Add to user's private Miis
-        await Users.findOneAndUpdate(
-            { username: uploader },
-            { $push: { privateMiis: mii.id } }
-        );
         
         // Store in database as private Mii
         await Miis.create({
@@ -4468,7 +4450,7 @@ site.post('/publishMii', requireAuth,  async (req, res) => {
     try {
         const { miiId } = req.body;
         
-        if (!req.user.privateMiis || !req.user.privateMiis.includes(miiId)) {
+        if (mii.uploader !== req.cookies.username) {
             return res.json({ error: 'Mii not found in your private collection' });
         }
 
@@ -4510,15 +4492,6 @@ site.post('/publishMii', requireAuth,  async (req, res) => {
         await Miis.findOneAndUpdate(
             { id: miiId },
             { $set: { private: false, published: true } }
-        );
-        
-        // Move to user's submissions and remove from privateMiis
-        await Users.findOneAndUpdate(
-            { username: req.cookies.username },
-            {
-                $push: { submissions: miiId },
-                $pull: { privateMiis: miiId }
-            }
         );
 
         // Notify Discord

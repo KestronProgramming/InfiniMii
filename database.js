@@ -50,12 +50,10 @@ const userSchema = new mongoose.Schema({
     creationDate: { type: Number, default: () => Date.now() },
     email: String,
     votedFor: { type: [String], default: [] },
-    submissions: { type: [String], default: [] }, // TODO_DB: remove this
     miiPfp: { type: String, default: "00000" },
     roles: { type: [String], default: ["basic"] },
     // token: String, // Deprecated in favor of JWTs
     verified: { type: Boolean, default: false },
-    privateMiis: { type: [String], default: [] },
     isBanned: { type: Boolean, default: false },
     banExpires: Number,
     banReason: String,
