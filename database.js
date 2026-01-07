@@ -52,7 +52,6 @@ const userSchema = new mongoose.Schema({
     votedFor: { type: [String], default: [] },
     miiPfp: { type: String, default: "00000" },
     roles: { type: [String], default: ["basic"] },
-    // token: String, // Deprecated in favor of JWTs
     verified: { type: Boolean, default: false },
     isBanned: { type: Boolean, default: false },
     banExpires: Number,

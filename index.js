@@ -108,18 +108,6 @@ async function getSendables(req, title, user) {
         const userPfpMii = await getMiiById(req.user.miiPfp, true);
         userPfpMiiColor = userPfpMii.general.favoriteColor;
     }
-        
-    // Ensure default user exists
-    // const userObj = req.user;
-    // if (!usersObj.Default) {
-    //     usersObj.Default = {
-    //         username: "Default",
-    //         miiPfp: "00000",
-    //         votedFor: [],
-    //         submissions: [],
-    //         roles: []
-    //     };
-    // }
     
     const currentUser = req.user?.username || "Default";
     const pfp = req.user?.miiPfp || "00000";
@@ -1343,13 +1331,6 @@ connectionPromise.then(() => { // TODO: server error page if DB fails
 
                     await Miis.create(mii);
 
-                    // Add to user's submissions
-                    await Users.findOneAndUpdate(
-                        { username: mii.uploader },
-                        { $push: { submissions: mii.id } },
-                        { upsert: true }
-                    );
-
                     fs.unlinkSync(`./quickUploads/${file}`);
                     console.log(`Added ${mii.meta.name} from quick uploads`);
                 })
@@ -1844,18 +1825,6 @@ site.post('/updateMiiField', requireAuth, requireRole(ROLES.MODERATOR), async (r
                 
                 oldValue = mii.uploader;
                 
-                // Remove from old uploader's submissions
-                await Users.findOneAndUpdate(
-                    { username: mii.uploader },
-                    { $pull: { submissions: id } }
-                );
-                
-                // Add to new uploader's submissions
-                await Users.findOneAndUpdate(
-                    { username: value },
-                    { $addToSet: { submissions: id } }
-                );
-                
                 updates.uploader = value;
                 break;
             default:
@@ -2129,7 +2098,8 @@ site.post('/permBanUser', requireAuth, requireRole(ROLES.ADMINISTRATOR), async (
         }
 
         // Delete all user's Miis
-        const miiIds = [...targetUser.submissions];
+        const userMiis = await Miis.find({ uploader: targetUser.username }).select('id').lean();
+        const miiIds = userMiis.map(m => m.id);
         for (const miiId of miiIds) {
             try {
                 const mii = await getMiiById(miiId);
@@ -2198,7 +2168,8 @@ site.post('/deleteAllUserMiis', requireAuth, requireRole(ROLES.MODERATOR), async
             return res.json({ error: 'User not found' });
         }
 
-        const miiIds = [...targetUser.submissions];
+        const userMiis = await Miis.find({ uploader: targetUser.username }).select('id').lean();
+        const miiIds = userMiis.map(m => m.id);
         let deletedCount = 0;
 
         for (const miiId of miiIds) {
@@ -2217,9 +2188,6 @@ site.post('/deleteAllUserMiis', requireAuth, requireRole(ROLES.MODERATOR), async
                 console.error(`Error deleting Mii ${miiId}:`, e);
             }
         }
-
-        // Clear user's submissions array
-        await Users.findOneAndUpdate({ username }, { $set: { submissions: [] } });
 
         makeReport(JSON.stringify({
             embeds: [{
@@ -2744,8 +2712,8 @@ site.post('/uploadExtractedAmiibo', async (req, res) => {
         const tempMiiId = req.body.miiId;
         
         // Check private Mii limit
-        if (!user.privateMiis) user.privateMiis = [];
-        if (user.privateMiis.length >= PRIVATE_MII_LIMIT) {
+        const privateMiisCount = await Miis.countDocuments({ uploader: req.user.username, private: true });
+        if (privateMiisCount >= PRIVATE_MII_LIMIT) {
             res.json({error: `You have reached the limit of ${PRIVATE_MII_LIMIT} private Miis. Please publish or delete some before uploading more.`});
             return;
         }
@@ -2843,8 +2811,8 @@ site.post('/uploadStudioMii', requireAuth, async (req, res) => {
         let uploader = req.user.username;
         
         // Check private Mii limit
-        if (!req.user.privateMiis) user.privateMiis = [];
-        if (req.user.privateMiis.length >= Number(PRIVATE_MII_LIMIT)) {
+        const privateMiisCount = await Miis.countDocuments({ uploader: req.user.username, private: true });
+        if (privateMiisCount >= Number(PRIVATE_MII_LIMIT)) {
             res.json({error: `You have reached the limit of ${PRIVATE_MII_LIMIT} private Miis. Please publish or delete some before uploading more.`});
             return;
         }
@@ -3219,8 +3187,12 @@ site.get('/user/:username', async (req, res) => {
     // inp.targetUser.name = targetUsername;
     inp.displayedMiis = [];
     
-    // Get all user's submissions
-    const miis = await Miis.find({ uploader: targetUsername, private: false, published: true }).lean();
+    // Get all user's public submissions
+    const miis = await Miis.find({ 
+        uploader: targetUsername, 
+        private: false, 
+        published: true
+    }).lean();
     inp.displayedMiis = miis;
     
     ejs.renderFile('./ejsFiles/userPage.ejs', inp, {}, function(err, str) {
@@ -3341,7 +3313,7 @@ site.get('/myPrivateMiis', requireAuth, async (req, res) => {
     var toSend = await getSendables(req, undefined, req.user);
     
     const privateMiis = await Miis.find({ uploader: req.user.username, private: true }).lean();
-    
+
     toSend.privateMiis = privateMiis;
     toSend.privateLimit = PRIVATE_MII_LIMIT;
     
@@ -4769,7 +4741,7 @@ setInterval(async () => {
 
 // TODO: "Check your email to verify your account!" should be feedback on the site, not a new page
 
-// TODO: remove submissions/privateMiis array from user
+
 
 // TODO: verify pass and salt are strings of len>1
 
@@ -4779,6 +4751,7 @@ setInterval(async () => {
 
 // TODO: search results page should show the search bar
 
+// TODO: username changes need to change mii's uploader field. 
 
 ///// Utils:
 // - Look for opening <% without closing one
