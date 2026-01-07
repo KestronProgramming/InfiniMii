@@ -559,7 +559,7 @@ async function paginatedApi(what, page = 1, perPage = defaultMiisPerPage, filter
             };
         }
         
-        case "top": {// TODO: rebrand to "trending"
+        case "trending": {// TODO: rebrand to "trending"
             const now = Date.now();
 
             const pipeline = [
@@ -608,7 +608,7 @@ async function paginatedApi(what, page = 1, perPage = defaultMiisPerPage, filter
             };
         }
 
-        case "best":
+        case "top":
             sort = { votes: -1 };
             break;
         
@@ -692,13 +692,13 @@ async function api(what,limit=50,begin=0,fltr){
         case "random":
             newArr = shuffleArray([...allMiis]);
             break;
-        case "top":
+        case "trending":
             newArr = [...allMiis];
             newArr.sort((a, b) => {
                 return wilsonMethod(b.votes, b.uploadedOn) - wilsonMethod(a.votes, a.uploadedOn);
             });
             break;
-        case "best":
+        case "top":
             newArr = [...allMiis];
             newArr.sort((a, b) => {
                 return b.votes - a.votes;
@@ -726,7 +726,7 @@ async function api(what,limit=50,begin=0,fltr){
             });
             break;
         default:
-            return `{"okay":false,"error":"No valid type specified"}`;
+            throw new Error("No valid type specified");
     }
     return newArr.slice(begin,limit);
 }
@@ -1136,13 +1136,14 @@ site.use(async (req, res, next) => {
     if (req.user) {
         if (req.user) {
             // Check IP ban
-            const clientIP = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
-            const ipHash = sha256(clientIP);
+            const clientIPs = [req.headers['x-forwarded-for'], req.socket.remoteAddress]
+                .filter(Boolean)
+                .map(ip => sha256(ip));
             const settings = await getSettings();
-            if (settings.bannedIPs.includes(ipHash)) {
+            if (settings.bannedIPs.some(ip => clientIPs.includes(ip))) {
                 res.clearCookie('username');
                 res.clearCookie('token');
-                return res.send('Your IP address has been permanently banned.');
+                return res.json({error: 'Your IP address has been permanently banned.'});
             }
             
             // Check user ban
@@ -1154,7 +1155,7 @@ site.use(async (req, res, next) => {
                 
                 if (req.user.role === ROLES.TEMP_BANNED && req.user.banExpires) {
                     const timeLeft = Math.ceil((req.user.banExpires - Date.now()) / (1000 * 60 * 60));
-                    return res.send(`You are temporarily banned. Time remaining: ${timeLeft} hours. Reason: ${req.user.banReason || 'No reason provided'}`);
+                    return res.json({error: `You are temporarily banned. Time remaining: ${timeLeft} hours. Reason: ${req.user.banReason || 'No reason provided'}`});
                 }
                 else {
                     return res.send(`You are permanently banned. Reason: ${req.user.banReason || 'No reason provided'}`);
@@ -1213,7 +1214,11 @@ site.use('/privateMiiImgs', async (req, res, next) => {
         if (isModerator || isOwner) {
             next();
         } else {
-            res.status(403).send('Access denied');
+            if (req.accepts('html')) {
+                res.status(403).json({ error: 'Access denied' });
+            } else {
+                res.status(403).send('Access denied');
+            }
         }
     } else {
         next();
@@ -1395,11 +1400,11 @@ site.get('/', async (req, res) => {
     let toSend = await getSendables(req, "InfiniMii");
     toSend.title = "InfiniMii";
     toSend.miiCategories={
-        "Random":{miis:await api("random",5),link:"./random"},
-        "Top":{miis:await api("top",5),link:"./top"},
-        "All Time Top":{miis:await api("best",5),link:"./best"},
-        "Recent":{miis:await api("recent",5),link:"./recent"},
-        "Official":{miis:await api("official",5),link:"./official"}
+        "Random": { miis: (await paginatedApi("random", 1, 5)).items, link: "./random" },
+        "Trending": { miis: (await paginatedApi("trending", 1, 5)).items, link: "./trending" },
+        "Top": { miis: (await paginatedApi("top", 1, 5)).items, link: "./top" },
+        "Recent": { miis: (await paginatedApi("recent", 1, 5)).items, link: "./recent" },
+        "Official": { miis: (await paginatedApi("official", 1, 5)).items, link: "./official" }
     };
     
     ejs.renderFile(toSend.thisUser.toLowerCase() === "default" ? './ejsFiles/about.ejs' : './ejsFiles/index.ejs', toSend, {}, function (err, str) {
@@ -1411,7 +1416,7 @@ site.get('/', async (req, res) => {
         res.send(str);
     });
 });
-//The following up to and including /recent are all sorted before being renders in miis.ejs, meaning the file is recycled. / is currently just a clone of /top. /official and /search is more of the same but with a slight change to make Highlighted Mii still work without the full Mii array
+//The following up to and including /recent are all sorted before being renders in miis.ejs, meaning the file is recycled. / is currently just a clone of /trending. /official and /search is more of the same but with a slight change to make Highlighted Mii still work without the full Mii array
 site.get('/random', async (req, res) => {
     let toSend = await getSendables(req);
     const page = parseInt(req.query.page) || 1;
@@ -1441,6 +1446,29 @@ site.get('/random', async (req, res) => {
         res.send(str)
     });
 });
+site.get('/trending', async (req, res) => {
+    let toSend = await getSendables(req);
+    const page = parseInt(req.query.page) || 1;
+    
+    const paginatedData = await paginatedApi("trending", page, defaultMiisPerPage);
+    toSend.displayedMiis = paginatedData.items;
+    toSend.pagination = {
+        currentPage: paginatedData.page,
+        totalPages: paginatedData.totalPages,
+        total: paginatedData.total,
+        perPage: paginatedData.perPage
+    };
+    
+    toSend.title = "Trending Miis - InfiniMii";
+    ejs.renderFile('./ejsFiles/miis.ejs', toSend, {}, function(err, str) {
+        if (err) {
+            res.send(err);
+            console.log(err);
+            return;
+        }
+        res.send(str)
+    });
+});
 site.get('/top', async (req, res) => {
     let toSend = await getSendables(req);
     const page = parseInt(req.query.page) || 1;
@@ -1455,29 +1483,6 @@ site.get('/top', async (req, res) => {
     };
     
     toSend.title = "Top Miis - InfiniMii";
-    ejs.renderFile('./ejsFiles/miis.ejs', toSend, {}, function(err, str) {
-        if (err) {
-            res.send(err);
-            console.log(err);
-            return;
-        }
-        res.send(str)
-    });
-});
-site.get('/best', async (req, res) => {
-    let toSend = await getSendables(req);
-    const page = parseInt(req.query.page) || 1;
-    
-    const paginatedData = await paginatedApi("best", page, defaultMiisPerPage);
-    toSend.displayedMiis = paginatedData.items;
-    toSend.pagination = {
-        currentPage: paginatedData.page,
-        totalPages: paginatedData.totalPages,
-        total: paginatedData.total,
-        perPage: paginatedData.perPage
-    };
-    
-    toSend.title = "All-Time Top Miis - InfiniMii";
     ejs.renderFile('./ejsFiles/miis.ejs', toSend, {}, function(err, str) {
         if (err) {
             res.send(err);
@@ -1642,17 +1647,17 @@ site.get('/upload', async (req, res) => {
 });
 site.get('/api', async (req, res) => {
     try{
-        res.send(await api(req.query.type,req.query.arg));
+        res.json(await api(req.query.type,req.query.arg));
     }
     catch(e){
-        res.send(`{"okay":false,"error":"Invalid arguments"}`);
+        res.json({error: "Invalid arguments"});
     }
 });
 site.get('/verify', async (req, res) => {
     try {
         const user = await getUserByUsername(req.query.user);
         if (!user) {
-            res.send("{'error':'User not found'}");
+            res.json({error: "User not found"});
             return;
         }
         
@@ -1683,7 +1688,7 @@ site.get('/verify', async (req, res) => {
             res.redirect("/");
         }
         else {
-            res.send("{'error:'Bad request'}");
+            res.json({error: "Bad request"});
             return;
         }
     }
@@ -1695,7 +1700,7 @@ site.get('/verify', async (req, res) => {
 site.get('/deleteMii', async (req, res) => {
     try {
         if (!req.user) {
-            res.send("{'okay':false}");
+            res.json({error: "Not logged in"});
             return;
         }
         
@@ -1707,7 +1712,7 @@ site.get('/deleteMii', async (req, res) => {
         const uploader = await getUserByUsername(mii.uploader);
         
         if (!mii) {
-            res.send("{'okay':false, 'error':'Mii not found'}");
+            res.json({error: "Mii not found"});
             return;
         }
         
@@ -1717,7 +1722,7 @@ site.get('/deleteMii', async (req, res) => {
                          isModerator;
         
         if (!canDelete) {
-            res.send("{'okay':false}");
+            res.json({error: "Permission denied"});
             return;
         }
         
@@ -1752,7 +1757,7 @@ site.get('/deleteMii', async (req, res) => {
                     },
                     {
                         "name": `${mii.official ? "Uploaded" : "Made"} by`,
-                        "value": `[${mii.uploader}](https://infinimii.com/user/${mii.uploader})`,
+                        "value": `[${mii.uploader}](https://infinimii.com/user/${encodeURIComponent(mii.uploader)})`,
                         "inline": true
                     },
                     {
@@ -1790,13 +1795,13 @@ site.get('/deleteMii', async (req, res) => {
         try { fs.unlinkSync(imgPath); } catch(e) {}
         try { fs.unlinkSync(qrPath); } catch(e) {}
         
-        res.send("{'okay':true}");
+        res.json({ okay: true });
         
         if(mii.uploader!==uploader.username) sendEmail(uploader.email,`Mii Deleted - InfiniMii`,`Hi ${mii.uploader}, one of your Miis "${mii.meta.name}" has been deleted by a Moderator. You can reply to this email to receive support.`);
     }
     catch (e) {
         console.error('Delete Mii error:', e);
-        res.send("{'okay':false,'error':'Server error'}");
+        res.json({error: "Server error"});
     }
 });
 // Update Mii Field (Moderator only)
@@ -1805,12 +1810,12 @@ site.post('/updateMiiField', requireAuth, requireRole(ROLES.MODERATOR), async (r
         const { id, field, value } = req.body;
 
         if (!id || !field || value === undefined) {
-            return res.json({ okay: false, error: 'Missing parameters' });
+            return res.json({ error: 'Missing parameters' });
         }
 
         const mii = await getMiiById(id);
         if (!mii) {
-            return res.json({ okay: false, error: 'Mii not found' });
+            return res.json({ error: 'Mii not found' });
         }
 
         // Store old value for logging
@@ -1835,7 +1840,7 @@ site.post('/updateMiiField', requireAuth, requireRole(ROLES.MODERATOR), async (r
                 // Validate new uploader exists
                 const newUploader = await getUserByUsername(value);
                 if (!newUploader) {
-                    return res.json({ okay: false, error: 'User does not exist' });
+                    return res.json({ error: 'User does not exist' });
                 }
                 
                 oldValue = mii.uploader;
@@ -1855,7 +1860,7 @@ site.post('/updateMiiField', requireAuth, requireRole(ROLES.MODERATOR), async (r
                 updates.uploader = value;
                 break;
             default:
-                return res.json({ okay: false, error: 'Invalid field' });
+                return res.json({ error: 'Invalid field' });
         }
 
         await Miis.findOneAndUpdate({ id }, { $set: updates });
@@ -1898,7 +1903,7 @@ site.post('/updateMiiField', requireAuth, requireRole(ROLES.MODERATOR), async (r
         res.json({ okay: true });
     } catch (e) {
         console.error('Error updating Mii field:', e);
-        res.json({ okay: false, error: 'Server error' });
+        res.json({ error: 'Server error' });
     }
 });
 // Regenerate QR Code (Moderator only)
@@ -1908,7 +1913,7 @@ site.get('/regenerateQR', requireAuth, requireRole(ROLES.MODERATOR), async (req,
         const mii = await getMiiById(id);
 
         if (!mii) {
-            return res.json({ okay: false, error: 'Mii not found' });
+            return res.json({ error: 'Mii not found' });
         }
 
         // Regenerate the QR code
@@ -1937,7 +1942,7 @@ site.get('/regenerateQR', requireAuth, requireRole(ROLES.MODERATOR), async (req,
         res.json({ okay: true });
     } catch (e) {
         console.error('Error regenerating QR:', e);
-        res.json({ okay: false, error: 'Server error' });
+        res.json({ error: 'Server error' });
     }
 });
 // Add Role to User (Admin only)
@@ -1947,11 +1952,11 @@ site.post('/addUserRole', requireAuth, requireRole(ROLES.ADMINISTRATOR), async (
         const targetUser = await getUserByUsername(username);
 
         if (!targetUser) {
-            return res.json({ okay: false, error: 'User not found' });
+            return res.json({ error: 'User not found' });
         }
 
         if (!Object.values(ROLES).includes(role)) {
-            return res.json({ okay: false, error: 'Invalid role' });
+            return res.json({ error: 'Invalid role' });
         }
 
         addRole(targetUser, role);
@@ -1986,10 +1991,10 @@ site.post('/addUserRole', requireAuth, requireRole(ROLES.ADMINISTRATOR), async (
             sendEmail(targetUser.email,`New Role Added - InfiniMii`,`Congratulations ${username}, you were made a ${role[0].toUpperCase()}${role.slice(1,role.length)} on InfiniMii!`);
         }
 
-        res.json({ okay: true, roles: targetUser.roles });
+        res.json({ roles: targetUser.roles });
     } catch (e) {
         console.error('Error adding user role:', e);
-        res.json({ okay: false, error: 'Server error' });
+        res.json({ error: 'Server error' });
     }
 });
 
@@ -2000,7 +2005,7 @@ site.post('/removeUserRole', requireAuth, requireRole(ROLES.ADMINISTRATOR), asyn
         const targetUser = await getUserByUsername(username);
 
         if (!targetUser) {
-            return res.json({ okay: false, error: 'User not found' });
+            return res.json({ error: 'User not found' });
         }
 
         removeRole(targetUser, role);
@@ -2032,10 +2037,10 @@ site.post('/removeUserRole', requireAuth, requireRole(ROLES.ADMINISTRATOR), asyn
             }]
         }));
 
-        res.json({ okay: true, roles: targetUser.roles });
+        res.json({ roles: targetUser.roles });
     } catch (e) {
         console.error('Error removing user role:', e);
-        res.json({ okay: false, error: 'Server error' });
+        res.json({ error: 'Server error' });
     }
 });
 
@@ -2046,12 +2051,12 @@ site.post('/tempBanUser', requireAuth, requireRole(ROLES.MODERATOR), async (req,
         const targetUser = await getUserByUsername(username);
 
         if (!targetUser) {
-            return res.json({ okay: false, error: 'User not found' });
+            return res.json({ error: 'User not found' });
         }
 
         // Moderators can't ban admins or other moderators
         if (!isAdmin(req.user) && canModerate(targetUser)) {
-            return res.json({ okay: false, error: 'Cannot ban moderators or administrators' });
+            return res.json({ error: 'Cannot ban moderators or administrators' });
         }
 
         addRole(targetUser, ROLES.TEMP_BANNED);
@@ -2098,7 +2103,7 @@ site.post('/tempBanUser', requireAuth, requireRole(ROLES.MODERATOR), async (req,
         res.json({ okay: true });
     } catch (e) {
         console.error('Error temp banning user:', e);
-        res.json({ okay: false, error: 'Server error' });
+        res.json({ error: 'Server error' });
     }
 });
 
@@ -2109,13 +2114,14 @@ site.post('/permBanUser', requireAuth, requireRole(ROLES.ADMINISTRATOR), async (
         const targetUser = await getUserByUsername(username);
 
         if (!targetUser) {
-            return res.json({ okay: false, error: 'User not found' });
+            return res.json({ error: 'User not found' });
         }
 
-        const clientIP = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+        // TODO: uuuh. This is banning the IP of the admin. Not the user. Check the other endpoint too.
+        const clientIP = [req.headers['x-forwarded-for'], req.socket.remoteAddress];
         
-        // Ban IP if not VPN
-        if (!isVPN(clientIP)) {
+        // Ban IP if not VPN - TODO: this should definitely still ban VPN IPs...
+        if (!isVPN(clientIP[0]) && !isVPN(clientIP[1])) {
             const ipHash = sha256(clientIP);
             const settings = await getSettings();
             if (!settings.bannedIPs.includes(ipHash)) {
@@ -2179,7 +2185,7 @@ site.post('/permBanUser', requireAuth, requireRole(ROLES.ADMINISTRATOR), async (
         res.json({ okay: true });
     } catch (e) {
         console.error('Error perm banning user:', e);
-        res.json({ okay: false, error: 'Server error' });
+        res.json({ error: 'Server error' });
     }
 });
 
@@ -2190,7 +2196,7 @@ site.post('/deleteAllUserMiis', requireAuth, requireRole(ROLES.MODERATOR), async
         const targetUser = await getUserByUsername(username);
 
         if (!targetUser) {
-            return res.json({ okay: false, error: 'User not found' });
+            return res.json({ error: 'User not found' });
         }
 
         const miiIds = [...targetUser.submissions];
@@ -2238,10 +2244,10 @@ site.post('/deleteAllUserMiis', requireAuth, requireRole(ROLES.MODERATOR), async
         }));
         //There is very very little reason this will not precede a ban, so we're not going to bother emailing the user for this one.
 
-        res.json({ okay: true, deletedCount });
+        res.json({ deletedCount });
     } catch (e) {
         console.error('Error deleting all user Miis:', e);
-        res.json({ okay: false, error: 'Server error' });
+        res.json({ error: 'Server error' });
     }
 });
 
@@ -2251,17 +2257,17 @@ site.post('/changeUsername', requireAuth, requireRole(ROLES.MODERATOR), async (r
         const { oldUsername, newUsername } = req.body;
 
         if (!validate(newUsername)) {
-            return res.json({ okay: false, error: 'Invalid username format' });
+            return res.json({ error: 'Invalid username format' });
         }
 
         const existing = await getUserByUsername(newUsername);
         if (existing) {
-            return res.json({ okay: false, error: 'Username already taken' });
+            return res.json({ error: 'Username already taken' });
         }
 
         const user = await getUserByUsername(oldUsername);
         if (!user) {
-            return res.json({ okay: false, error: 'User not found' });
+            return res.json({ error: 'User not found' });
         }
 
         // Update username in User document
@@ -2301,7 +2307,7 @@ site.post('/changeUsername', requireAuth, requireRole(ROLES.MODERATOR), async (r
         res.json({ okay: true });
     } catch (e) {
         console.error('Error changing username:', e);
-        res.json({ okay: false, error: 'Server error' });
+        res.json({ error: 'Server error' });
     }
 });
 
@@ -2311,12 +2317,12 @@ site.post('/toggleMiiOfficial', requireAuth, requireRole(ROLES.MODERATOR), async
         const { id, official } = req.body;
 
         if (!id || official === undefined) {
-            return res.json({ okay: false, error: 'Missing parameters' });
+            return res.json({ error: 'Missing parameters' });
         }
 
         const mii = await getMiiById(id, false);
         if (!mii) {
-            return res.json({ okay: false, error: 'Mii not found' });
+            return res.json({ error: 'Mii not found' });
         }
 
         const oldStatus = mii.official;
@@ -2359,7 +2365,7 @@ site.post('/toggleMiiOfficial', requireAuth, requireRole(ROLES.MODERATOR), async
         res.json({ okay: true });
     } catch (e) {
         console.error('Error toggling official status:', e);
-        res.json({ okay: false, error: 'Server error' });
+        res.json({ error: 'Server error' });
     }
 });
 
@@ -2378,12 +2384,12 @@ site.get('/sitemap.xml', async (req, res) => {
             priority: '0.8'
         },
         {
-            loc: baseUrl + '/top',
+            loc: baseUrl + '/trending',
             changefreq: 'hourly',
             priority: '0.9'
         },
         {
-            loc: baseUrl + '/best',
+            loc: baseUrl + '/top',
             changefreq: 'daily',
             priority: '0.9'
         },
@@ -2518,7 +2524,7 @@ site.get('/amiibo', async (req, res) => {
 site.post('/extractMiiFromAmiibo', upload.single('amiibo'), async (req, res) => {
     try {
         if (!req.file) {
-            res.json({ okay: false, error: 'No Amiibo file uploaded' });
+            res.json({ error: 'No Amiibo file uploaded' });
             return;
         }
         
@@ -2551,11 +2557,11 @@ site.post('/extractMiiFromAmiibo', upload.single('amiibo'), async (req, res) => 
         // Clean up upload
         try { fs.unlinkSync("./uploads/" + req.file.filename); } catch (e) { }
         
-        res.json({ okay: true, mii: mii });
+        res.json({ mii: mii });
     } catch (e) {
         console.error('Error extracting Mii from Amiibo:', e);
         try { fs.unlinkSync("./uploads/" + req.file.filename); } catch (e) { }
-        res.json({ okay: false, error: 'Failed to extract Mii from Amiibo: ' + e.message });
+        res.json({ error: 'Failed to extract Mii from Amiibo: ' + e.message }); // TODO: don't send message
     }
 });
 
@@ -2567,7 +2573,7 @@ site.post('/insertMiiIntoAmiibo', upload.fields([
 ]), async (req, res) => {
     try {
         if (!req.files.amiibo || !req.files.amiibo[0]) {
-            res.json({ okay: false, error: 'No Amiibo file uploaded' });
+            res.json({ error: 'No Amiibo file uploaded' });
             return;
         }
         
@@ -2580,7 +2586,7 @@ site.post('/insertMiiIntoAmiibo', upload.fields([
         // Get Mii data based on source
         if (source === 'file') {
             if (!req.files.mii || !req.files.mii[0]) {
-                res.json({ okay: false, error: 'No Mii file uploaded' });
+                res.json({ error: 'No Mii file uploaded' });
                 try { fs.unlinkSync(req.files.amiibo[0].path); } catch (e) { }
                 return;
             }
@@ -2615,7 +2621,7 @@ site.post('/insertMiiIntoAmiibo', upload.fields([
             const miiId = req.body.miiId;
             
             if (!miiId || !miiId.trim()) {
-                res.json({ okay: false, error: 'No Mii ID provided' });
+                res.json({ error: 'No Mii ID provided' });
                 try { fs.unlinkSync(req.files.amiibo[0].path); } catch (e) { }
                 return;
             }
@@ -2634,7 +2640,7 @@ site.post('/insertMiiIntoAmiibo', upload.fields([
                     const isOwner = privateMii.uploader === req.cookies.username;
                 
                     if (!isOwner && !isModerator) {
-                        res.json({ okay: false, error: 'You do not have permission to use this private Mii' });
+                        res.json({ error: 'You do not have permission to use this private Mii' });
                         try { fs.unlinkSync(req.files.amiibo[0].path); } catch (e) { }
                         return;
                     }
@@ -2644,7 +2650,7 @@ site.post('/insertMiiIntoAmiibo', upload.fields([
             }
             
             if (!mii) {
-                res.json({ okay: false, error: 'Invalid Mii ID - Mii not found' });
+                res.json({ error: 'Invalid Mii ID - Mii not found' });
                 try { fs.unlinkSync(req.files.amiibo[0].path); } catch (e) { }
                 return;
             }
@@ -2662,7 +2668,7 @@ site.post('/insertMiiIntoAmiibo', upload.fields([
                 fs.unlinkSync(tempPath);
             } catch (e) {
                 console.error('Error converting Mii to binary:', e);
-                res.json({ okay: false, error: 'Failed to convert Mii data: ' + e.message });
+                res.json({ error: 'Failed to convert Mii data: ' + e.message });  // TODO: remove e.message
                 try { fs.unlinkSync(req.files.amiibo[0].path); } catch (e2) { }
                 try { fs.unlinkSync(tempPath); } catch (e2) { }
                 return;
@@ -2687,7 +2693,7 @@ site.post('/insertMiiIntoAmiibo', upload.fields([
             try { fs.unlinkSync(tempPath); } catch (e) { }
         }
         else {
-            res.json({ okay: false, error: 'Invalid Mii source' });
+            res.json({ error: 'Invalid Mii source' });
             try { fs.unlinkSync(req.files.amiibo[0].path); } catch (e) { }
             return;
         }
@@ -2725,7 +2731,7 @@ site.post('/insertMiiIntoAmiibo', upload.fields([
             if (req.files.amiibo) fs.unlinkSync(req.files.amiibo[0].path);
             if (req.files.mii) fs.unlinkSync(req.files.mii[0].path);
         } catch (cleanupErr) { }
-        res.json({ okay: false, error: 'Failed to insert Mii into Amiibo: ' + e.message });
+        res.json({ error: 'Failed to insert Mii into Amiibo: ' + e.message });
     }
 });
 // Upload extracted Amiibo Mii
@@ -2733,7 +2739,7 @@ site.post('/uploadExtractedAmiibo', async (req, res) => {
     try {
         // Check authentication
         if (!req.user) {
-            res.send("{'error':'Please log in to upload Miis'}");
+            res.json({error: "Please log in to upload Miis"});
             return;
         }
         const tempMiiId = req.body.miiId;
@@ -2741,7 +2747,7 @@ site.post('/uploadExtractedAmiibo', async (req, res) => {
         // Check private Mii limit
         if (!user.privateMiis) user.privateMiis = [];
         if (user.privateMiis.length >= PRIVATE_MII_LIMIT) {
-            res.send(`{'error':'You have reached the limit of ${PRIVATE_MII_LIMIT} private Miis. Please publish or delete some before uploading more.'}`);
+            res.json({error: `You have reached the limit of ${PRIVATE_MII_LIMIT} private Miis. Please publish or delete some before uploading more.`});
             return;
         }
         
@@ -2750,7 +2756,7 @@ site.post('/uploadExtractedAmiibo', async (req, res) => {
         const tempQrPath = `./static/miiQRs/${tempMiiId}.png`;
         
         if (!fs.existsSync(tempImgPath) || !fs.existsSync(tempQrPath)) {
-            res.send("{'error':'Extracted Mii data not found. Please extract again.'}");
+            res.json({error: "Extracted Mii data not found. Please extract again."});
             return;
         }
         
@@ -2804,7 +2810,7 @@ site.post('/uploadExtractedAmiibo', async (req, res) => {
                     },
                     {
                         "name": `Uploaded by`,
-                        "value": `[${username}](https://miis.kestron.com/user/${username})`,
+                        "value": `[${username}](https://miis.kestron.com/user/${encodeURIComponent(username)})`,
                         "inline": true
                     },
                     {
@@ -2833,7 +2839,7 @@ site.post('/uploadExtractedAmiibo', async (req, res) => {
         
     } catch (e) {
         console.error('Error uploading extracted Amiibo Mii:', e);
-        res.send("{'error':'Server error: " + e.message + "'}");
+        res.json({error: "Server error: " + e.message});
     }
 });
 // ========== STUDIO ENDPOINTS ==========
@@ -2846,13 +2852,13 @@ site.post('/uploadStudioMii', requireAuth, async (req, res) => {
         // Check private Mii limit
         if (!req.user.privateMiis) user.privateMiis = [];
         if (req.user.privateMiis.length >= Number(PRIVATE_MII_LIMIT)) {
-            res.send(`{'okay':false,'error':'You have reached the limit of ${PRIVATE_MII_LIMIT} private Miis. Please publish or delete some before uploading more.'}`);
+            res.json({error: `You have reached the limit of ${PRIVATE_MII_LIMIT} private Miis. Please publish or delete some before uploading more.`});
             return;
         }
         
         // Check if trying to upload official Mii without permission
         if (req.body.official && !canUploadOfficial(req.user)) {
-            res.send("{'error':'Only Researchers and Administrators can upload official Miis'}");
+            res.json({error: 'Only Researchers and Administrators can upload official Miis'});
             return;
         }
         
@@ -2868,7 +2874,7 @@ site.post('/uploadStudioMii', requireAuth, async (req, res) => {
         
         // Validate hex format
         if (!/^[0-9a-fA-F]+$/.test(studioCode)) {
-            res.send("{'error':'Invalid Studio code format'}");
+            res.json({error: "Invalid Studio code format"});
             return;
         }
         
@@ -2929,7 +2935,7 @@ site.post('/uploadStudioMii', requireAuth, async (req, res) => {
                     },
                     {
                         "name": `Uploaded by`,
-                        "value": `[${uploader}](https://infinimii.com/user/${uploader})`,
+                        "value": `[${uploader}](https://infinimii.com/user/${encodeURIComponent(uploader)})`,
                         "inline": true
                     },
                     {
@@ -2957,7 +2963,7 @@ site.post('/uploadStudioMii', requireAuth, async (req, res) => {
         
     } catch (e) {
         console.error('Error uploading Studio Mii:', e);
-        res.send("{'error':'Failed to upload Mii from Studio: " + e.message + "'}");
+        res.json({error: "Failed to upload Mii from Studio: " + e.message}); // TODO: remove e.message
     }
 });
 
@@ -2971,7 +2977,7 @@ site.get('/downloadMii', async (req, res) => {
         
         const mii = await getMiiById(miiId, false);
         if (!mii) {
-            res.send("{'error':'Invalid Mii ID'}");
+            res.json({error: "Invalid Mii ID"});
             return;
         }
         const miiName = mii.meta.name.replace(/[^a-z0-9]/gi, '_');
@@ -3033,12 +3039,12 @@ site.get('/downloadMii', async (req, res) => {
             
         }
         else {
-            res.send("{'error':'Invalid format specified'}");
+            res.json({error: "Invalid format specified"});
         }
         
     } catch (e) {
         console.error('Error downloading Mii:', e);
-        res.send("{'error':'Failed to download Mii: " + e.message + "'}");
+        res.json({error: "Failed to download Mii: " + e.message});
     }
 });
 
@@ -3049,20 +3055,19 @@ site.get('/getStudioCode', async (req, res) => {
         
         const mii = await getMiiById(miiId, false);
         if (!mii) {
-            res.json({ okay: false, error: 'Invalid Mii ID' });
+            res.json({ error: 'Invalid Mii ID' });
             return;
         }
         const studioCode = miijs.convertMiiToStudio(mii);
         
         res.json({ 
-            okay: true, 
             code: studioCode,
             url: `https://studio.mii.nintendo.com/miis/image.png?data=${studioCode}`
         });
         
     } catch (e) {
         console.error('Error getting Studio code:', e);
-        res.json({ okay: false, error: 'Failed to get Studio code: ' + e.message });
+        res.json({ error: 'Failed to get Studio code: ' + e.message }); // TODO: remove sending error from here
     }
 });
 
@@ -3073,12 +3078,12 @@ site.post('/changeUserPfp', requireAuth, requireRole(ROLES.MODERATOR), async (re
         const targetUser = await getUserByUsername(username);
 
         if (!targetUser) {
-            return res.json({ okay: false, error: 'User not found' });
+            return res.json({ error: 'User not found' });
         }
 
         const mii = await getMiiById(miiId, false);
         if (!mii) {
-            return res.json({ okay: false, error: 'Mii not found' });
+            return res.json({ error: 'Mii not found' });
         }
 
         await Users.findOneAndUpdate(
@@ -3113,17 +3118,17 @@ site.post('/changeUserPfp', requireAuth, requireRole(ROLES.MODERATOR), async (re
         res.json({ okay: true });
     } catch (e) {
         console.error('Error changing user PFP:', e);
-        res.json({ okay: false, error: 'Server error' });
+        res.json({ error: 'Server error' });
     }
 });
 site.post('/voteMii', requireAuth, async (req, res) => {
     if (!req.query.id) {
-        res.send("{'error':'No ID specified'}");
+        res.json({error: "No ID specified"});
         return;
     }
     try {
         if (req.user.submissions.includes(req.query.id)) {
-            res.send("{'error':'You submitted this Mii'}");
+            res.json({error: "You submitted this Mii"});
             return;
         }
         if (req.user.votedFor.includes(req.query.id)) {
@@ -3151,7 +3156,7 @@ site.post('/voteMii', requireAuth, async (req, res) => {
         res.send("Liked");
     }
     catch (e) {
-        res.send("{'error':`" + e + "`}");
+        res.json({error: e}); // TOOD: don't send error
         return;
     }
 });
@@ -3207,7 +3212,7 @@ site.get('/user/:username', async (req, res) => {
     if (!targetUser) {
         return res.status(404).send('User not found');
     }
-    if (targetUsername === "Nintendo") { // TODO: misspellings, capitalizations, etc.
+    if (targetUsername === "Nintendo") { // a s'ti mret hcraes a ton si odnetniN ,tnavelerrI :nortseK
         res.redirect('/official');
         return;
     }
@@ -3374,13 +3379,13 @@ site.get('/changePfp', requireAuth, async (req, res) => {
                 { username: req.cookies.username },
                 { $set: { miiPfp: req.query.id } }
             );
-            res.send(`{"okay":true}`);
+            res.json({ okay: true });
         } else {
-            res.send(`{"okay":false,"msg":"Invalid Mii ID"}`);
+            res.json({error: "Invalid Mii ID"});
         }
     }
     else {
-        res.send(`{"okay":false,"msg":"Invalid Mii ID"}`);
+        res.json({error: "Invalid Mii ID"});
     }
 });
 site.get('/changeUser', requireAuth, async (req, res) => {    
@@ -3416,14 +3421,14 @@ site.get('/changeUser', requireAuth, async (req, res) => {
                 "footer": {
                     "text": `Changed at ${d.getHours()}:${d.getMinutes()}, ${d.toDateString()} UTC`
                 },
-                "url": `https://infinimii.com/user/${newUsername}`
+                "url": `https://infinimii.com/user/${encodeURIComponent(newUsername)}`
             }]
         }));
         res.cookie('username', newUsername, { maxAge: 30 * 24 * 60 * 60 * 1000/*1 Month*/ });
-        res.send(`{"okay":true}`);
+        res.json({ okay: true });
     }
     else {
-        res.send(`{"okay":false,"msg":"Username invalid"}`);
+        res.json({error: "Username invalid"});
     }
 });
 site.get('/changeHighlightedMii', requireAuth, requireRole(ROLES.MODERATOR), async (req, res) => {    
@@ -3431,7 +3436,7 @@ site.get('/changeHighlightedMii', requireAuth, requireRole(ROLES.MODERATOR), asy
     if (miiId?.length > 0) {
         const mii = await getMiiById(miiId, false);
         if (!mii) {
-            res.send(`{"okay":false,"msg":"Invalid Mii ID"}`);
+            res.json({error: "Invalid Mii ID"});
             return;
         }
         
@@ -3441,7 +3446,7 @@ site.get('/changeHighlightedMii', requireAuth, requireRole(ROLES.MODERATOR), asy
             highlightedMiiChangeDay: currentDate.getDate()
         });
         
-        res.send(`{"okay":true}`);
+        res.json({ okay: true });
         let miiImageData;
         try {
             miiImageData = fs.readFileSync(`./static/miiImgs/${mii.id}.png`);
@@ -3473,7 +3478,7 @@ site.get('/changeHighlightedMii', requireAuth, requireRole(ROLES.MODERATOR), asy
                     },
                     {
                         "name": `Uploaded by`,
-                        "value": `[${mii.uploader}](https://infinimii.com/user/${mii.uploader})`,
+                        "value": `[${mii.uploader}](https://infinimii.com/user/${encodeURIComponent(mii.uploader)})`,
                         "inline": true
                     },
                     {
@@ -3495,7 +3500,7 @@ site.get('/changeHighlightedMii', requireAuth, requireRole(ROLES.MODERATOR), asy
         }), attachments);
     }
     else {
-        res.send(`{"okay":false,"msg":"Invalid Mii ID"}`);
+        res.json({error: "Invalid Mii ID"});
     }
 });
 site.get('/reportMii', async (req,res)=>{ // TODO: add endpoints that cause stuff should be POST, not GET to prevent CSRF
@@ -3519,7 +3524,7 @@ site.get('/reportMii', async (req,res)=>{ // TODO: add endpoints that cause stuf
                 },
                 {
                     "name": `Uploaded by`,
-                    "value": `[${mii.uploader}](https://infinimii.com/user/${mii.uploader})`,
+                    "value": `[${mii.uploader}](https://infinimii.com/user/${encodeURIComponent(mii.uploader)})`,
                     "inline": true
                 },
                 {
@@ -3539,7 +3544,7 @@ site.get('/reportMii', async (req,res)=>{ // TODO: add endpoints that cause stuf
             "url": `https://infinimii.com/mii/` + mii.id
         }]
     }));
-    res.send(`{"okay":true}`);
+    res.json({ okay: true });
 });
 site.get('/miiWii',async (req,res)=>{
     const fetchedMii = await getMiiById(req.query.id, false);
@@ -3579,12 +3584,12 @@ site.post('/changeEmail', requireAuth, async (req, res) => {
 
         // Verify old email matches
         if (req.user.email !== oldEmail) {
-            return res.json({ okay: false, msg: 'Old email does not match' });
+            return res.json({ error: 'Old email does not match' });
         }
 
         // Basic email validation
         if (!newEmail || !newEmail.includes('@') || !newEmail.includes('.')) {
-            return res.json({ okay: false, msg: 'Invalid email format' });
+            return res.json({ error: 'Invalid email format' });
         }
 
         var token = genToken();
@@ -3628,7 +3633,7 @@ site.post('/changeEmail', requireAuth, async (req, res) => {
         res.json({ okay: true });
     } catch (e) {
         console.error('Error changing email:', e);
-        res.json({ okay: false, msg: 'Server error' });
+        res.json({ error: 'Server error' });
     }
 });
 
@@ -3639,7 +3644,7 @@ site.post('/changePassword', requireAuth, async (req, res) => {
 
         // Verify old password
         if (!validatePassword(oldPassword, req.user.salt, req.user.pass)) {
-            return res.json({ okay: false, msg: 'Old password is incorrect' });
+            return res.json({ error: 'Old password is incorrect' });
         }
 
         // Hash new password with existing salt
@@ -3688,7 +3693,7 @@ site.post('/changePassword', requireAuth, async (req, res) => {
         res.json({ okay: true });
     } catch (e) {
         console.error('Error changing password:', e);
-        res.json({ okay: false, msg: 'Server error' });
+        res.json({ error: 'Server error' });
     }
 });
 
@@ -3741,10 +3746,10 @@ site.post('/deleteAllMyMiis', requireAuth, async (req, res) => {
             }]
         }));
         sendEmail(req.user.email,`All Miis Deleted - InfiniMii`,`Hi ${req.cookies.username}, we received a request to delete all of your Miis. If this wasn't you, reply to this email to receive support.`);
-        res.json({ okay: true, deletedCount });
+        res.json({ deletedCount });
     } catch (e) {
         console.error('Error deleting all user Miis:', e);
-        res.json({ okay: false, msg: 'Server error' });
+        res.json({ error: 'Server error' });
     }
 });
 
@@ -3756,7 +3761,7 @@ site.post('/deleteAccount', requireAuth, async (req, res) => {
 
         // Verify password
         if (!validatePassword(password, req.user.salt, req.user.pass)) {
-            return res.json({ okay: false, msg: 'Password is incorrect' });
+            return res.json({ error: 'Password is incorrect' });
         }
 
         // Transfer Miis to a special "Deleted User" account
@@ -3817,7 +3822,7 @@ site.post('/deleteAccount', requireAuth, async (req, res) => {
         res.json({ okay: true });
     } catch (e) {
         console.error('Error deleting account:', e);
-        res.json({ okay: false, msg: 'Server error' });
+        res.json({ error: 'Server error' });
     }
 });
 
@@ -3829,7 +3834,7 @@ site.get('/getInstructions', async (req, res) => {
         
         let mii = await getMiiById(miiId, false);
         if (!mii) {
-            res.json({ okay: false, error: 'Invalid Mii ID' });
+            res.json({ error: 'Invalid Mii ID' });
             return;
         }
         
@@ -3842,7 +3847,6 @@ site.get('/getInstructions', async (req, res) => {
         const instructions = miijs.generateInstructions(mii, full);
         
         res.json({ 
-            okay: true, 
             instructions: instructions,
             miiName: mii.meta.name,
             format: format
@@ -3850,7 +3854,7 @@ site.get('/getInstructions', async (req, res) => {
         
     } catch (e) {
         console.error('Error generating instructions:', e);
-        res.json({ okay: false, error: 'Failed to generate instructions: ' + e.message });
+        res.json({ error: 'Failed to generate instructions: ' + e.message });
     }
 });
 
@@ -3861,18 +3865,20 @@ site.post('/uploadMii', requireAuth, upload.single('mii'), async (req, res) => {
         // Check private Mii limit
         if (!req.user.privateMiis) user.privateMiis = [];
         if (req.user.privateMiis.length >= Number(PRIVATE_MII_LIMIT)) {
-            res.send(`{'okay':false,'error':'You have reached the limit of ${PRIVATE_MII_LIMIT} private Miis. Please publish or delete some before uploading more.'}`);
+            res.json({error: `You have reached the limit of ${PRIVATE_MII_LIMIT} private Miis. Please publish or delete some before uploading more.`});
             try { fs.unlinkSync("./uploads/" + req.file.filename); } catch (e) { }
             return;
         }
         
         // Check if trying to upload official Mii without permission
         if (req.body.official && !canUploadOfficial(req.user)) {
-            res.send("{'error':'Only Researchers and Administrators can upload official Miis'}");
+            res.json({'error': 'Only Researchers and Administrators can upload official Miis'});
             try { fs.unlinkSync("./uploads/" + req.file.filename); } catch (e) { }
             return;
         }
         
+        // TODO: catch errors here and request that they make sure they selected the right upload type
+
         let mii;
         if (req.body.type === "wii") {
             // Read Wii Mii and convert TO 3DS format
@@ -3890,15 +3896,14 @@ site.post('/uploadMii', requireAuth, upload.single('mii'), async (req, res) => {
                     binData = fs.readFileSync("./uploads/" + req.file.filename);
                 } catch (e) {
                     console.error('Error reading 3DS bin file:', e);
-                    res.send(`{'error':'Invalid 3DS bin file: ${e.message}'}`);
+                    res.json({error: `Invalid 3DS bin file: ${e.message}`});
                     try { fs.unlinkSync("./uploads/" + req.file.filename); } catch (e2) { }
                     return;
                 }
-                res.send("{'error':'No file uploaded for 3DS bin'}");
-                return;
             }
             else{
-                binData=bitStringToBuffer(req.body['3dsbin']);
+                res.json({error: 'No file uploaded for 3DS bin'});
+                return;
             }
             mii = await miijs.read3DSQR(binData);
         }
@@ -3908,7 +3913,7 @@ site.post('/uploadMii', requireAuth, upload.single('mii'), async (req, res) => {
             const tempBinPath = `./static/temp/${tempMiiId}.bin`;
             
             if (!fs.existsSync(tempBinPath)) {
-                res.send("{'error':'Amiibo Mii data not found. Please extract again.'}");
+                res.json({error: 'Amiibo Mii data not found. Please extract again.'});
                 return;
             }
             
@@ -3922,12 +3927,12 @@ site.post('/uploadMii', requireAuth, upload.single('mii'), async (req, res) => {
                 try { fs.unlinkSync(`./static/miiQRs/${tempMiiId}.png`); } catch (e) { }
             } catch (e) {
                 console.error('Error reading Amiibo Mii:', e);
-                res.send(`{'error':'Invalid Amiibo Mii data: ${e.message}'}`);
+                res.json({error: `Invalid Amiibo Mii data: ${e.message}`});
                 return;
             }
         }
         else {
-            res.send("{'error':'No valid type specified'}");
+            res.json({error: 'No valid type specified'});
             try { fs.unlinkSync("./uploads/" + req.file.filename); } catch (e) { }
             return;
         }
@@ -3986,7 +3991,7 @@ site.post('/uploadMii', requireAuth, upload.single('mii'), async (req, res) => {
                     },
                     {
                         "name": `Uploaded by`,
-                        "value": `[${uploader}](https://infinimii.com/user/${uploader})`,
+                        "value": `[${uploader}](https://infinimii.com/user/${encodeURIComponent(uploader)})`,
                         "inline": true
                     },
                     {
@@ -4011,9 +4016,12 @@ site.post('/uploadMii', requireAuth, upload.single('mii'), async (req, res) => {
         ]);
         
         setTimeout(() => { res.redirect("/myPrivateMiis") }, 2000);
+
+        // TODO: does rendering lag this? If so, 
+
     } catch (e) {
         console.error('Error uploading Mii:', e);
-        res.send("{'okay':false,'error':'Server error'}");
+        res.json({error: 'Server error'});
         try { fs.unlinkSync("./uploads/" + req.file.filename); } catch (e2) { }
     }
 });
@@ -4023,16 +4031,16 @@ site.post('/updateOfficialCategories', requireAuth, requireRole(ROLES.RESEARCHER
         const { miiId, categories } = req.body;
 
         if (!miiId || !Array.isArray(categories)) {
-            return res.json({ okay: false, error: 'Missing parameters' });
+            return res.json({ error: 'Missing parameters' });
         }
 
         const mii = await getMiiById(miiId, false);
         if (!mii) {
-            return res.json({ okay: false, error: 'Mii not found' });
+            return res.json({ error: 'Mii not found' });
         }
 
         if (!mii.official) {
-            return res.json({ okay: false, error: 'This is not an official Mii' });
+            return res.json({ error: 'This is not an official Mii' });
         }
 
         const oldCategories = mii.officialCategories || [];
@@ -4072,17 +4080,17 @@ site.post('/updateOfficialCategories', requireAuth, requireRole(ROLES.RESEARCHER
         res.json({ okay: true });
     } catch (e) {
         console.error('Error updating official categories:', e);
-        res.json({ okay: false, error: 'Server error' });
+        res.json({ error: 'Server error' });
     }
 });
 // Get all official categories (nested structure)
 site.get('/getOfficialCategories', async (req, res) => {
     try {
         const settings = await getSettings();
-        res.json({ okay: true, categories: settings.officialCategories.categories });
+        res.json({ categories: settings.officialCategories.categories });
     } catch (e) {
         console.error('Error getting categories:', e);
-        res.json({ okay: false, error: 'Server error' });
+        res.json({ error: 'Server error' });
     }
 });
 
@@ -4092,7 +4100,7 @@ site.post('/addCategory', requireAuth, requireRole(ROLES.RESEARCHER), async (req
         const { name, color, parentPath } = req.body;
 
         if (!name || !name.trim()) {
-            return res.json({ okay: false, error: 'Category name required' });
+            return res.json({ rror: 'Category name required' });
         }
 
         const categoryName = name.trim();
@@ -4109,13 +4117,13 @@ site.post('/addCategory', requireAuth, requireRole(ROLES.RESEARCHER), async (req
             
             // Check if already exists at root
             if (targetArray.find(c => c.name === categoryName)) {
-                return res.json({ okay: false, error: 'Category already exists at this level' });
+                return res.json({ error: 'Category already exists at this level' });
             }
         } else {
             // Add as child of parent
             const parent = findCategoryByPath(parentPath);
             if (!parent) {
-                return res.json({ okay: false, error: 'Parent category not found' });
+                return res.json({ error: 'Parent category not found' });
             }
             
             targetArray = parent.children;
@@ -4123,7 +4131,7 @@ site.post('/addCategory', requireAuth, requireRole(ROLES.RESEARCHER), async (req
             
             // Check if already exists under this parent
             if (targetArray.find(c => c.name === categoryName)) {
-                return res.json({ okay: false, error: 'Category already exists under this parent' });
+                return res.json({ error: 'Category already exists under this parent' });
             }
         }
 
@@ -4164,10 +4172,10 @@ site.post('/addCategory', requireAuth, requireRole(ROLES.RESEARCHER), async (req
             }]
         }));
 
-        res.json({ okay: true, categories: settings.officialCategories.categories });
+        res.json({ categories: settings.officialCategories.categories });
     } catch (e) {
         console.error('Error adding category:', e);
-        res.json({ okay: false, error: 'Server error' });
+        res.json({ error: 'Server error' });
     }
 });
 
@@ -4177,12 +4185,12 @@ site.post('/renameCategory', requireAuth, requireRole(ROLES.RESEARCHER), async (
         const { path, newName } = req.body;
 
         if (!path || !newName || !newName.trim()) {
-            return res.json({ okay: false, error: 'Path and new name required' });
+            return res.json({ error: 'Path and new name required' });
         }
 
         const category = findCategoryByPath(path);
         if (!category) {
-            return res.json({ okay: false, error: 'Category not found' });
+            return res.json({ error: 'Category not found' });
         }
 
         const newNameTrimmed = newName.trim();
@@ -4194,7 +4202,7 @@ site.post('/renameCategory', requireAuth, requireRole(ROLES.RESEARCHER), async (
         const parent = findParentByChildPath(path);
         const siblings = parent ? parent.children : settings.officialCategories.categories;
         if (siblings.find(c => c.name === newNameTrimmed && c.path !== path)) {
-            return res.json({ okay: false, error: 'A category with this name already exists at this level' });
+            return res.json({ error: 'A category with this name already exists at this level' });
         }
 
         // Get all paths that will change (this category and all descendants)
@@ -4255,10 +4263,10 @@ site.post('/renameCategory', requireAuth, requireRole(ROLES.RESEARCHER), async (
             }]
         }));
 
-        res.json({ okay: true, categories: settings.officialCategories.categories, updatedMiis: totalUpdated });
+        res.json({ categories: settings.officialCategories.categories, updatedMiis: totalUpdated });
     } catch (e) {
         console.error('Error renaming category:', e);
-        res.json({ okay: false, error: 'Server error' });
+        res.json({ error: 'Server error' });
     }
 });
 
@@ -4268,12 +4276,12 @@ site.post('/deleteCategory', requireAuth, requireRole(ROLES.RESEARCHER), async (
         const { path } = req.body;
 
         if (!path) {
-            return res.json({ okay: false, error: 'Category path required' });
+            return res.json({ error: 'Category path required' });
         }
 
         const category = findCategoryByPath(path);
         if (!category) {
-            return res.json({ okay: false, error: 'Category not found' });
+            return res.json({ error: 'Category not found' });
         }
 
         // Get all paths to remove (category and all descendants)
@@ -4329,10 +4337,10 @@ site.post('/deleteCategory', requireAuth, requireRole(ROLES.RESEARCHER), async (
             }]
         }));
 
-        res.json({ okay: true, categories: settings.officialCategories.categories, updatedMiis: totalUpdated });
+        res.json({ categories: settings.officialCategories.categories, updatedMiis: totalUpdated });
     } catch (e) {
         console.error('Error deleting category:', e);
-        res.json({ okay: false, error: 'Server error' });
+        res.json({ error: 'Server error' });
     }
 });
 
@@ -4342,21 +4350,21 @@ site.post('/moveCategory', requireAuth, requireRole(ROLES.RESEARCHER), async (re
         const { categoryPath, newParentPath } = req.body;
 
         if (!categoryPath) {
-            return res.json({ okay: false, error: 'Category path required' });
+            return res.json({ error: 'Category path required' });
         }
 
         const category = findCategoryByPath(categoryPath);
         if (!category) {
-            return res.json({ okay: false, error: 'Category not found' });
+            return res.json({ error: 'Category not found' });
         }
 
         // Prevent moving to self or descendant
         if (newParentPath && newParentPath.startsWith(categoryPath + '/')) {
-            return res.json({ okay: false, error: 'Cannot move category to its own descendant' });
+            return res.json({ error: 'Cannot move category to its own descendant' });
         }
 
         if (newParentPath === categoryPath) {
-            return res.json({ okay: false, error: 'Cannot move category to itself' });
+            return res.json({ error: 'Cannot move category to itself' });
         }
 
         // Get all paths before move
@@ -4381,14 +4389,14 @@ site.post('/moveCategory', requireAuth, requireRole(ROLES.RESEARCHER), async (re
         } else {
             newParentNode = findCategoryByPath(newParentPath);
             if (!newParentNode) {
-                return res.json({ okay: false, error: 'New parent category not found' });
+                return res.json({ error: 'New parent category not found' });
             }
             newSiblings = newParentNode.children;
         }
 
         // Check for name conflict
         if (newSiblings.find(c => c.name === category.name)) {
-            return res.json({ okay: false, error: 'A category with this name already exists at the destination' });
+            return res.json({ error: 'A category with this name already exists at the destination' });
         }
 
         newSiblings.push(category);
@@ -4439,20 +4447,20 @@ site.post('/moveCategory', requireAuth, requireRole(ROLES.RESEARCHER), async (re
             }]
         }));
 
-        res.json({ okay: true, categories: settings.officialCategories.categories, updatedMiis: totalUpdated });
+        res.json({ categories: settings.officialCategories.categories, updatedMiis: totalUpdated });
     } catch (e) {
         console.error('Error moving category:', e);
-        res.json({ okay: false, error: 'Server error' });
+        res.json({ error: 'Server error' });
     }
 });
 // Get all official categories (for building forms)
 site.get('/getOfficialCategories', async (req, res) => {
     try {
         const settings = await getSettings();
-        res.json({ okay: true, categories: settings.officialCategories });
+        res.json({ categories: settings.officialCategories });
     } catch (e) {
         console.error('Error getting categories:', e);
-        res.json({ okay: false, error: 'Server error' });
+        res.json({ error: 'Server error' });
     }
 });
 // Publish a private Mii
@@ -4461,17 +4469,17 @@ site.post('/publishMii', requireAuth,  async (req, res) => {
         const { miiId } = req.body;
         
         if (!req.user.privateMiis || !req.user.privateMiis.includes(miiId)) {
-            return res.json({ okay: false, error: 'Mii not found in your private collection' });
+            return res.json({ error: 'Mii not found in your private collection' });
         }
 
         const mii = await Miis.findOne({ id: miiId, private: true }).lean();
         if (!mii) {
-            return res.json({ okay: false, error: 'Mii data not found' });
+            return res.json({ error: 'Mii data not found' });
         }
 
         // Check if blocked from publishing
         if (mii.blockedFromPublishing) {
-            return res.json({ okay: false, error: 'This Mii has been blocked from publishing by a moderator. Please contact support if you believe this is an error.' });
+            return res.json({ error: 'This Mii has been blocked from publishing by a moderator. Please contact support if you believe this is an error.' });
         }
 
         // Move files from private to public folders
@@ -4485,7 +4493,7 @@ site.post('/publishMii', requireAuth,  async (req, res) => {
             }
         } catch (e) {
             console.error('Error moving Mii files:', e);
-            return res.json({ okay: false, error: 'Error moving Mii files' });
+            return res.json({ error: 'Error moving Mii files' });
         }
 
         //Because of security for private images, we can't just move the folders, we have to make new renders.
@@ -4529,7 +4537,7 @@ site.post('/publishMii', requireAuth,  async (req, res) => {
                     },
                     {
                         "name": `Published by`,
-                        "value": `[${req.cookies.username}](https://infinimii.com/user/${req.cookies.username})`,
+                        "value": `[${req.cookies.username}](https://infinimii.com/user/${encodeURIComponent(req.cookies.username)})`,
                         "inline": true
                     }
                 ],
@@ -4551,7 +4559,7 @@ site.post('/publishMii', requireAuth,  async (req, res) => {
         res.json({ okay: true });
     } catch (e) {
         console.error('Error publishing Mii:', e);
-        res.json({ okay: false, error: 'Server error' });
+        res.json({ error: 'Server error' });
     }
 });
 // Block a private Mii from being published (Moderator only)
@@ -4559,9 +4567,9 @@ site.post('/blockMiiFromPublishing', requireAuth, requireRole(ROLES.MODERATOR), 
     try {
         const { miiId, reason } = req.body;
 
-        const mii = await Miis.findOne({ id: miiId, private: true }).lean();
+        const mii = await Miis.findOne({ id: miiId, published: false }).lean();
         if (!mii) {
-            return res.json({ okay: false, error: 'Private Mii not found' });
+            return res.json({ error: 'Unpublished Mii not found' });
         }
 
         await Miis.findOneAndUpdate(
@@ -4602,7 +4610,7 @@ site.post('/blockMiiFromPublishing', requireAuth, requireRole(ROLES.MODERATOR), 
         res.json({ okay: true });
     } catch (e) {
         console.error('Error blocking Mii:', e);
-        res.json({ okay: false, error: 'Server error' });
+        res.json({ error: 'Server error' });
     }
 });
 site.post('/convertMii', upload.single('mii'), async (req, res) => {
@@ -4654,7 +4662,7 @@ site.post('/convertMii', upload.single('mii'), async (req, res) => {
     }
     catch (e) {
         console.log(e);
-        res.send("{'okay':false}");
+        res.json({error: "Server error"});
     }
 });
 site.post('/signup', async (req, res) => {
@@ -4662,31 +4670,36 @@ site.post('/signup', async (req, res) => {
 
     // Field validation
     if (!validator.isEmail(req.body.email)) {
-        res.send("Invalid email address");
+        res.json({ error: "Invalid email address" });
         return;
     }
     const cleanEmail = validator.normalizeEmail(req.body.email);
 
     // Validate username
     const existingUsername = await getUserByUsername(req.body.username);
+    if (existingUsername) {
+        res.json({ error: "Username already taken" });
+        return;
+    }
     if (isBad(req.body.username) || existingUsername || !validate(req.body.username)) {
-        res.send("Username Invalid");
+        res.json({ error: "Username invalid" });
         return;
     }
 
     // Account does not already exist
     const existingUserEmail = await Users.exists({ email: cleanEmail })
     if (existingUserEmail) {
-        res.send("Email already in use");
+        res.json({ error: "Email already in use" });
         return;
     }
     
     // Check IP ban
-    const clientIP = req.headers['x-forwarded-for'] || req.connection.remoteAddress; // TODO: ban bypass exploit
-    const ipHash = sha256(clientIP);
+    const clientIPs = [req.headers['x-forwarded-for'], req.socket.remoteAddress]
+        .filter(Boolean)
+        .map(ip => sha256(ip))
     const settings = await getSettings();
-    if (settings.bannedIPs.includes(ipHash)) {
-        return res.send('This IP address has been permanently banned from creating accounts.');
+    if (settings.bannedIPs.some( ip => clientIPs.includes(ip))) {
+        return res.json({ error: 'This IP address has been permanently banned from creating accounts.' });
     }
     
     var hashedPassword = hashPassword(req.body.pass);
@@ -4704,14 +4717,14 @@ site.post('/signup', async (req, res) => {
     
     let link = "https://infinimii.com/verify?user=" + encodeURIComponent(req.body.username) + "&token=" + encodeURIComponent(token);
     sendEmail(cleanEmail, "InfiniMii Verification", 
-        "Welcome to InfiniMii! Please verify your email by clicking this link: " + link
+        "Welcome to InfiniMii! If you initiated this message, verify your email by clicking this link: " + link
     );
-    res.send("Check your email to verify your account!");
+    res.json({ message: "Check your email to verify your account!" });
 });
 site.post('/login', async (req, res) => {
     const user = await getUserByUsername(req.body.username);
     if (!user) {
-        res.send("Invalid username or password");
+        res.json({ error: "Invalid username or password" });
         return;
     }
     
@@ -4731,7 +4744,9 @@ site.post('/login', async (req, res) => {
             });
         }
         else {
-            res.send("Email not verified yet");
+            res.json({ error: "Email not verified yet" }); 
+            // TODO: should this prevent login until email validated? Maybe add a resend code button. 
+            // TODO: if email is never validated, the username is lost... give them maybe 24 hours to verify their email before deleting the account...
             return;
         }
     }
@@ -4769,7 +4784,6 @@ site.use((err, req, res, next) => {
     }
 });
 
-
 setInterval(async () => {
     var curTime = new Date();
     const settings = await getSettings();
@@ -4782,10 +4796,20 @@ setInterval(async () => {
 
 // TODO: "Check your email to verify your account!" should be feedback on the site, not a new page
 
-// TODO: remove submissions array from user
+// TODO: remove submissions/privateMiis array from user
 
 // TODO: verify pass and salt are strings of len>1
 
+// TOOD: /logout should not give no auth errors
+
+// TODO: middlewhare should serve json responses...
+
+// TODO: search results page should show the search bar
+
+
+///// Utils:
+// - Look for opening <% without closing one
+// <%(?![\s\S]*%>)
 
 ///// Utils:
 // - Look for opening <% without closing one

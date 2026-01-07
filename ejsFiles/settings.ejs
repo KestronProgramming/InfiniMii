@@ -86,12 +86,12 @@
 					const response = await fetch(`/changePfp?id=${encodeURIComponent(pfpId)}`);
 					const result = await response.json();
 					
-					if (result.okay) {
+					if (!result.error) {
 						alert('Profile picture changed successfully!');
 						location.reload();
 					}
                     else {
-						alert(result.msg || 'Error changing profile picture');
+						alert(result.error || 'Error changing profile picture');
 					}
 				} catch (error) {
 					console.error('Error:', error);
@@ -113,12 +113,12 @@
 					const response = await fetch(`/changeUser?newUser=${encodeURIComponent(newUser)}`);
 					const result = await response.json();
 					
-					if (result.okay) {
+					if (!result.error) {
 						alert('Username changed successfully! Please log in again.');
 						window.location.href = '/login';
 					}
                     else {
-						alert(result.msg || 'Error changing username');
+						alert(result.error || 'Error changing username');
 					}
 				} catch (error) {
 					console.error('Error:', error);
@@ -144,13 +144,13 @@
 
 					const result = await response.json();
 					
-					if (result.okay) {
+					if (!result.error) {
 						alert('Email changed successfully!');
 						document.getElementById('oEmail').value = '';
 						document.getElementById('nEmail').value = '';
 					}
                     else {
-						alert(result.msg || 'Error changing email');
+						alert(result.error || 'Error changing email');
 					}
 				} catch (error) {
 					console.error('Error:', error);
@@ -181,13 +181,13 @@
 
 					const result = await response.json();
 					
-					if (result.okay) {
+					if (!result.error) {
 						alert('Password changed successfully!');
 						document.getElementById('oPass').value = '';
 						document.getElementById('nPass').value = '';
 					}
                     else {
-						alert(result.msg || 'Error changing password');
+						alert(result.error || 'Error changing password');
 					}
 				} catch (error) {
 					console.error('Error:', error);
@@ -213,12 +213,12 @@
 
 					const result = await response.json();
 					
-					if (result.okay) {
+					if (!result.error) {
 						alert(`Successfully deleted ${result.deletedCount} Miis`);
 						location.reload();
 					}
                     else {
-						alert(result.msg || 'Error deleting Miis');
+						alert(result.error || 'Error deleting Miis');
 					}
 				} catch (error) {
 					console.error('Error:', error);
@@ -252,12 +252,12 @@
 
 					const result = await response.json();
 					
-					if (result.okay) {
+					if (!result.error) {
 						alert('Account deleted successfully. Goodbye!');
 						window.location.href = '/';
 					}
                     else {
-						alert(result.msg || 'Error deleting account');
+						alert(result.error || 'Error deleting account');
 					}
 				} catch (error) {
 					console.error('Error:', error);

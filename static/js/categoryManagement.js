@@ -18,7 +18,7 @@ async function addParentCategory() {
         
         const data = await response.json();
         
-        if (data.okay) {
+        if (!data.error) {
             alert('Parent category created successfully!');
             location.reload();
         } else {
@@ -48,7 +48,7 @@ async function addSubcategory(parentCategory) {
         
         const data = await response.json();
         
-        if (data.okay) {
+        if (!data.error) {
             alert('Subcategory created successfully!');
             location.reload();
         } else {
@@ -74,7 +74,7 @@ async function renameParentCategory(oldName) {
         
         const data = await response.json();
         
-        if (data.okay) {
+        if (!data.error) {
             alert('Category renamed successfully!');
             location.reload();
         } else {
@@ -106,7 +106,7 @@ async function renameSubcategory(parentCategory, oldName) {
         
         const data = await response.json();
         
-        if (data.okay) {
+        if (!data.error) {
             alert(`Subcategory renamed successfully!\n${data.updatedMiis} Miis were updated.`);
             location.reload();
         } else {
@@ -134,7 +134,7 @@ async function deleteSubcategory(parentCategory, subcategoryName) {
         
         const data = await response.json();
         
-        if (data.okay) {
+        if (!data.error) {
             alert(`Subcategory deleted successfully!\n${data.updatedMiis} Miis were updated.`);
             location.reload();
         } else {
@@ -168,7 +168,7 @@ async function deleteParentCategory(name) {
         
         const data = await response.json();
         
-        if (data.okay) {
+        if (!data.error) {
             alert(`Parent category deleted successfully!\n${data.updatedMiis} Miis were updated.`);
             location.reload();
         } else {

@@ -26,7 +26,7 @@ async function loadCategoriesStudio() {
         const response = await fetch('/getOfficialCategories');
         const data = await response.json();
         
-        if (data.okay) {
+        if (!data.error) {
             officialCategoriesStudio = data.categories;
             renderCategoryTreeStudio();
         } else {

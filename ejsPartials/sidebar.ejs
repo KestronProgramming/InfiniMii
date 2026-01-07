@@ -2,11 +2,20 @@
     <ul class="sidebar-list">
         <a href="/search"><li><span class="emoji">🔍</span> Search</li></a>
         <a href="/random"><li><span class="emoji">🎲</span> Random Miis</li></a>
-        <a href="/top"><li><span class="emoji">📈</span> Top Miis</li></a>
-        <a href="/best"><li><span class="emoji">🥇</span> All-Time Top Miis</li></a>
+        <a href="/trending"><li><span class="emoji">📈</span> Trending Miis</li></a>
+        <a href="/top"><li><span class="emoji">🥇</span> Top Miis</li></a>
         <a href="/recent"><li><span class="emoji">⏱️</span> Recent Miis</li></a>
         <a href="/official"><li><span class="emoji">🌟</span> Official Miis</li></a>
-        <a href="<%= thisUser==="Default"?'/signup':'/user/'+thisUser %>"><li><img class="account-image-small" src="/miiImgs/<%= pfp %>.png" width="18px" height="18px"> Profile</li></a>
+        <a href="<%= 
+            thisUser==="Default"
+                ?'/signup'
+                :'/user/'+encodeURIComponent(thisUser) 
+            %>">
+            <li>
+                <img class="account-image-small" src="/miiImgs/<%= pfp %>.png" width="18px" height="18px">
+                Profile
+            </li>
+        </a>
         <a href="/myPrivateMiis"><li><span class="emoji">📦</span> My Private Miis</li></a>
     </ul>
     <br>

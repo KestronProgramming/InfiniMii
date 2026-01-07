@@ -96,7 +96,7 @@
                     
                     const data = await response.json();
                     
-                    if (data.okay) {
+                    if (!data.error) {
                         alert('Mii published successfully!');
                         location.reload();
                     } else {

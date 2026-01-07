@@ -108,7 +108,6 @@
                                 <span class="info-value"><%= ["Red", "Orange", "Yellow", "Lime", "Green", "Blue", "Cyan", "Pink", "Purple", "Brown", "White", "Black"][mii.general.favoriteColor] %></span>
                             </div>
                             <% } %>
-                            <% if(isOfficial) { %>
                                 <script>
                                 const currentCategories = '<%- JSON.stringify(mii.officialCategories || []) %>';
                                 let officialCategories = [];
@@ -120,7 +119,7 @@
                                         const response = await fetch('/getOfficialCategories');
                                         const data = await response.json();
                                         
-                                        if (data.okay) {
+                                        if (!data.error) {
                                             officialCategories = data.categories;
                                             // Auto-expand paths that contain selected categories
                                             currentCategories.forEach(path => {
@@ -301,7 +300,7 @@
                                         
                                         const data = await response.json();
                                         
-                                        if (data.okay) {
+                                        if (!data.error) {
                                             alert('Categories updated successfully!');
                                             window.location.reload();
                                         } else {
@@ -381,6 +380,7 @@
                                         height: 18px;
                                     }
                                     </style>
+                            <% if(isOfficial) { %>
                                     <% } %>
                         </div>
                     </div>
@@ -426,7 +426,7 @@
                     <% } else{%>
                     <div class="uploader-info">
                         <span class="label">Uploaded by</span>
-                        <a href="/user/<%= mii.uploader %>"><%= mii.uploader %></a>
+                        <a href="/user/<%= encodeURIComponent(mii.uploader) %>"><%= mii.uploader %></a>
                         <time class="date" datetime="<%= new Date(mii.uploadedOn).toISOString() %>" itemprop="datePublished">on <%= new Date(mii.uploadedOn).toLocaleDateString() %></time>
                     </div>
                     <% } %>
@@ -711,7 +711,7 @@
                     const response = await fetch('/getStudioCode?id=<%= mii.id %>');
                     const result = await response.json();
                     
-                    if (result.okay) {
+                    if (!result.error) {
                         await navigator.clipboard.writeText(result.code);
                         statusEl.textContent = '✓ Copied!';
                         statusEl.style.color = 'var(--brand-color)';
@@ -761,7 +761,7 @@
                     const response = await fetch(`/getInstructions?id=<%= mii.id %>&format=${currentInstructionsFormat}&full=${full}`);
                     const result = await response.json();
                     
-                    if (result.okay) {
+                    if (!result.error) {
                         currentInstructionsData = result.instructions;
                         displayInstructions(result.instructions);
                     }
@@ -851,7 +851,7 @@
                         });
                         
                         const result = await response.json();
-                        if (result.okay) {
+                        if (!result.error) {
                             alert('Mii blocked from publishing');
                             location.reload();
                         } else {
@@ -873,7 +873,7 @@
                         });
                         
                         const result = await response.json();
-                        if (result.okay) {
+                        if (!result.error) {
                             alert('Mii unblocked');
                             location.reload();
                         } else {
@@ -915,7 +915,7 @@
 
                         const result = await response.json();
                         
-                        if (result.okay) {
+                        if (!result.error) {
                             alert(`Successfully updated ${field}!`);
                             location.reload();
                         }
@@ -941,7 +941,7 @@
                         const response = await fetch('/regenerateQR?id=<%= mii.id %>');
                         const result = await response.json();
                         
-                        if (result.okay) {
+                        if (!result.error) {
                             statusEl.textContent = '✓ Done!';
                             statusEl.style.color = '#4CAF50';
                             setTimeout(() => {
@@ -976,7 +976,7 @@
                         const response = await fetch('/deleteMii?id=<%= mii.id %>');
                         const result = await response.json();
                         
-                        if (result.okay) {
+                        if (!result.error) {
                             alert('Mii deleted successfully');
                             window.location.href = '/';
                         }
@@ -1010,7 +1010,7 @@
 
                         const result = await response.json();
                         
-                        if (result.okay) {
+                        if (!result.error) {
                             alert(`Mii official status updated!`);
                             location.reload();
                         }

@@ -296,7 +296,7 @@
                     
                     const result = await response.json();
                     
-                    if (result.okay) {
+                    if (result.mii) {
                         extractedMiiData = result.mii;
                         document.getElementById('extractedMiiImage').src = '/miiImgs/' + result.mii.id + '.png';
                         document.getElementById('extractedMiiName').textContent = result.mii.meta.name;

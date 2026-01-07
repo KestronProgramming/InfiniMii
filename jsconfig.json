@@ -10,7 +10,7 @@
     "strict": false,
   },
   "typeAcquisition": {
-    "enable": false
+    "enable": true
   },
   "exclude": [
     "node_modules",

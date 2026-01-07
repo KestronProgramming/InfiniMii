@@ -53,7 +53,7 @@
                     const response = await fetch('/getOfficialCategories');
                     const data = await response.json();
                     
-                    if (data.okay) {
+                    if (!data.error) {
                         categories = data.categories;
                         renderTree();
                     } else {
@@ -173,7 +173,7 @@
                     
                     const data = await response.json();
                     
-                    if (data.okay) {
+                    if (!data.error) {
                         alert('Root category created successfully!');
                         document.getElementById('newRootName').value = '';
                         await loadCategories();
@@ -206,7 +206,7 @@
                     
                     const data = await response.json();
                     
-                    if (data.okay) {
+                    if (!data.error) {
                         alert('Child category created successfully!');
                         expandedNodes.add(parentPath); // Auto-expand parent
                         await loadCategories();
@@ -243,7 +243,7 @@
                     
                     const data = await response.json();
                     
-                    if (data.okay) {
+                    if (!data.error) {
                         alert(`Category renamed successfully!\n${data.updatedMiis} Miis were updated.`);
                         await loadCategories();
                     } else {
@@ -308,7 +308,7 @@
                     
                     const data = await response.json();
                     
-                    if (data.okay) {
+                    if (!data.error) {
                         alert(`Category moved successfully!\n${data.updatedMiis} Miis were updated.`);
                         if (newParentPath) expandedNodes.add(newParentPath);
                         await loadCategories();
@@ -353,7 +353,7 @@
                     
                     const data = await response.json();
                     
-                    if (data.okay) {
+                    if (!data.error) {
                         alert(`Category deleted successfully!\n${data.updatedMiis} Miis were updated.`);
                         await loadCategories();
                     } else {

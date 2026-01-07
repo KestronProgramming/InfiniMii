@@ -21,11 +21,11 @@ function deleteMii(id){
 }
 function highlightedMiiChange(){
     fetch("/changeHighlightedMii?id="+document.getElementById("highlightedMiiID").value).then(d=>d.json()).then(d=>{
-        if(d.okay){
+        if(!d.error){
             location.reload();
         }
         else{
-            alert(d.msg);
+            alert(d.error);
         }
     });
 }

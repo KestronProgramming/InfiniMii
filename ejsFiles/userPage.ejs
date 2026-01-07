@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <html>
     <head>
-        <title><%= targetUser.name %> - InfiniMii</title>
-        <meta content="<%= targetUser.name %>" property="og:title" />
-        <meta content="User <%= targetUser.name %>'s Miis on InfiniMii'" property="og:description" />
-        <meta content="https://infinimii.com/user/<%= targetUser.name %>" property="og:url" />
+        <title><%= targetUser.username %> - InfiniMii</title>
+        <meta content="<%= targetUser.username %>" property="og:title" />
+        <meta content="User <%= targetUser.username %>'s Miis on InfiniMii'" property="og:description" />
+        <meta content="https://infinimii.com/user/<%= encodeURIComponent(targetUser.username) %>" property="og:url" />
         <meta content="https://infinimii.com/miiImgs/<%= targetUser.miiPfp %>.png" property="og:image" />
         <meta content="#ff0000" data-react-helmet="true" name="theme-color" />
         <link rel="stylesheet" href="/global.css">
@@ -19,10 +19,10 @@
             <div class="profile-container">
                 <!-- Profile Header -->
                 <div class="profile-header">
-                    <img src="/miiImgs/<%= targetUser.miiPfp %>.png" alt="<%= targetUser.name %>" class="profile-avatar">
+                    <img src="/miiImgs/<%= targetUser.miiPfp %>.png" alt="<%= targetUser.username %>" class="profile-avatar">
                     <div class="profile-info">
                         <div class="profile-name">
-                            <h1><%= targetUser.name %></h1>
+                            <h1><%= targetUser.username %></h1>
                             <%
                                 const ROLE_DISPLAY={ 
                                     'tempBanned': '🚫 Temp Banned',
@@ -78,7 +78,7 @@
                 </div>
 
                 <!-- Moderator Tools for Profiles -->
-                <% if(isModerator && thisUser !== targetUser.name) { %>
+                <% if(isModerator && thisUser !== targetUser.username) { %>
                     <div class="moderator-tools">
                         <div class="mod-tools-header" onclick="toggleModTools()">
                             <h3>🛠️ Moderator Tools</h3>
@@ -145,7 +145,7 @@
                                 <div class="mod-tool-item">
                                     <label>Change Username:</label>
                                     <input type="text" id="newUsername"
-                                        value="<%= targetUser.name %>" placeholder="New Username">
+                                        value="<%= targetUser.username %>" placeholder="New Username">
                                     <button onclick="changeUsername()">✏️ Change
                                         Username</button>
                                 </div>
@@ -167,7 +167,7 @@
                 <!-- Profile Content -->
                 <div class="profile-content">
                     <h2 class="profile-section-title">
-                        <%= targetUser.name %>'s Miis
+                        <%= targetUser.username %>'s Miis
                     </h2>
 
                     <% if(displayedMiis.length> 0) { %>
@@ -196,7 +196,7 @@
                             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 96 960 960">
                                 <path d="M480 976q-33 0-56.5-23.5T400 896q0-33 23.5-56.5T480 816q33 0 56.5 23.5T560 896q0 33-23.5 56.5T480 976Zm0-240q-33 0-56.5-23.5T400 656V256q0-33 23.5-56.5T480 176q33 0 56.5 23.5T560 256v400q0 33-23.5 56.5T480 736Z" />
                             </svg>
-                            <h3>No Miis Yet</h3>
+                            <h3>No Published Miis Yet</h3>
                             <p>This user hasn't uploaded any Miis.</p>
                         </div>
                     <% } %>
@@ -224,7 +224,7 @@
                 async function updateUserRoles() {
                     const checkboxes = document.querySelectorAll('.role-checkboxes input[type="checkbox"]');
                     const selectedRoles = Array.from(checkboxes)
-                        .filter(cb => cb.checked)
+                        .filter(cb => cb.checked)a
                         .map(cb => cb.value);
 
                     // Always include basic role if no roles selected
@@ -258,7 +258,7 @@
                                 })
                             });
                             const result = await response.json();
-                            if (!result.okay) {
+                            if (result.error) {
                                 alert(`Error removing role ${role}: ${result.error}`);
                                 return;
                             }
@@ -272,7 +272,7 @@
                                 body: JSON.stringify({ username: targetUsername, role })
                             });
                             const result = await response.json();
-                            if (!result.okay) {
+                            if (result.error) {
                                 alert(`Error adding role ${role}: ${result.error}`);
                                 return;
                             }
@@ -307,7 +307,7 @@
 
                         const result = await response.json();
 
-                        if (result.okay) {
+                        if (!result.error) {
                             alert(`User temporarily banned for ${hours} hours`);
                             location.reload();
                         }
@@ -342,7 +342,7 @@
 
                         const result = await response.json();
 
-                        if (result.okay) {
+                        if (!result.error) {
                             alert('User permanently banned and deleted');
                             window.location.href = '/';
                         }
@@ -374,7 +374,7 @@
 
                         const result = await response.json();
 
-                        if (result.okay) {
+                        if (!result.error) {
                             alert(`Deleted ${result.deletedCount} Miis`);
                             location.reload();
                         }
@@ -407,7 +407,7 @@
 
                         const result = await response.json();
 
-                        if (result.okay) {
+                        if (!result.error) {
                             alert('Username changed successfully!');
                             window.location.href = `/user/${encodeURIComponent(newUsername)}`;
                         }
@@ -440,7 +440,7 @@
 
                         const result = await response.json();
 
-                        if (result.okay) {
+                        if (!result.error) {
                             alert('Profile picture changed successfully!');
                             location.reload();
                         }
