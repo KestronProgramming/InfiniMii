@@ -83,7 +83,9 @@
 				}
 
 				try {
-					const response = await fetch(`/changePfp?id=${encodeURIComponent(pfpId)}`, {
+					const response = await fetch(`/changePfp`, {
+						method: "POST",
+						body: JSON.stringify({ id: encodeURIComponent(pfpId) }),
 						headers: { "Content-Type": "application/json" },
 					});
 					const result = await response.json();
@@ -112,7 +114,9 @@
 				if (!confirmed) return;
 
 				try {
-					const response = await fetch(`/changeUser?newUser=${encodeURIComponent(newUser)}`, {
+					const response = await fetch(`/changeUser`, {
+						method: "POST",
+						body: JSON.stringify({ newUser: encodeURIComponent(newUser) }),
 						headers: { "Content-Type": "application/json" },
 					});
 					const result = await response.json();

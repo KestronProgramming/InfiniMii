@@ -34,7 +34,13 @@ function deleteMii(id){
 	}
 }
 function highlightedMiiChange(){
-    fetch("/changeHighlightedMii?id="+document.getElementById("highlightedMiiID").value).then(d=>d.json()).then(d=>{
+    fetch("/changeHighlightedMii", {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json"
+		},
+		body: JSON.stringify({ id: document.getElementById("highlightedMiiID").value })
+	}).then(d=>d.json()).then(d=>{
         if(!d.error){
             location.reload();
         }

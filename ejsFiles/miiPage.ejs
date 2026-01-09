@@ -685,7 +685,12 @@
             }
             function report(){
                 var what=prompt("What would you like to report this Mii for?");
-                fetch("/reportMii?id=<%= mii.id %>&what="+encodeURIComponent(what), {
+                fetch("/reportMii", {
+                    method: "POST",
+                    body: JSON.stringify({
+                        id: "<%= mii.id %>",
+                        what: what
+                    }),
                     headers: { "Content-Type": "application/json" },
                 });
             }
@@ -944,7 +949,9 @@
                     statusEl.style.color = '#FFA500';
 
                     try {
-                        const response = await fetch('/regenerateQR?id=<%= mii.id %>', {
+                        const response = await fetch('/regenerateQR', {
+                            method: "POST",
+                            body: JSON.stringify({ id: "<%= mii.id %>" })
                             headers: { "Content-Type": "application/json" },
                         });
                         const result = await response.json();

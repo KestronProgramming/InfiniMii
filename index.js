@@ -20,6 +20,8 @@ import { doubleMetaphone } from 'double-metaphone';
 import validator from 'validator';
 import jwt from 'jsonwebtoken';
 import { STATUS_CODES } from 'http';
+import { rateLimit } from 'express-rate-limit'
+import ms from 'ms'
 
 process.env = JSON.parse(fs.readFileSync("./env.json", "utf-8"));
 import { connectionPromise, Mii as Miis, User as Users, Settings } from "./database.js";
@@ -27,7 +29,9 @@ import { connectionPromise, Mii as Miis, User as Users, Settings } from "./datab
 const defaultMiisPerPage = 15;
 const PRIVATE_MII_LIMIT = process.env.privateMiiLimit;
 const baseUrl = process.env.baseUrl;
+
 const swearList = englishDataset.containers.map(c => c.metadata.originalWord).filter(Boolean);
+var globalSalt = process.env.salt;
 const upload = multer({
     dest: './uploads/',
     filename: (req, file, cb) => {
@@ -36,7 +40,14 @@ const upload = multer({
         cb(null, `${hash}.${ext}`);
     }
 });
-var globalSalt = process.env.salt;
+
+const defaultRatelimiter = rateLimit({
+	windowMs: ms("10s"),
+	limit: 5,
+	standardHeaders: 'draft-8', // draft-6: `RateLimit-*` headers; draft-7 & draft-8: combined `RateLimit` header
+	legacyHeaders: false, // Disable the `X-RateLimit-*` headers.
+	ipv6Subnet: 56, // Set to 60 or 64 to be less aggressive, or 52 or 48 to be more aggressive
+})
 
 function bitStringToBuffer(bitString) {
   const byteLength = Math.ceil(bitString.length / 8);
@@ -1047,7 +1058,7 @@ function escapeXml(unsafe) {
     });
 }
 
-import 'express-async-errors'; // Make router async errors handle the same as sync errors (dropping down to next() handler)
+import 'express-async-errors'; // Inject express to make router async errors handle the same as sync errors (dropping down to next() handler)
 const site = express();
 site.use(express.json());
 site.use(express.urlencoded({ extended: true }));
@@ -1664,152 +1675,132 @@ site.get('/upload', requireAuth, async (req, res) => {
         res.send(str)
     });
 });
-site.get('/api', async (req, res) => {
-    try{
-        res.json(await api(req.query.type,req.query.arg));
-    }
-    catch(e){
-        res.json({error: "Invalid arguments"});
-    }
-});
 site.get('/verify', async (req, res) => {
-    try {
-        const user = await getUserByUsername(req.query.user);
-        if (!user) {
-            res.json({error: "User not found"});
-            return;
-        }
-        
-        if (validatePassword(req.query.token, user.salt, user.verificationToken)) {
-            await Users.findOneAndUpdate(
-                { username: req.query.user },
-                { 
-                    $unset: { verificationToken: "" },
-                    $set: { 
-                        verified: true 
-                    }
-                }
-            );
-            
-            // Get updated user and create JWT
-            const updatedUser = await getUserByUsername(req.query.user);
-            const jwtToken = createToken(updatedUser);
-            
-            res.cookie("username", req.query.user, { 
-                maxAge: 30 * 24 * 60 * 60 * 1000 // 1 Month
-            });
-            res.cookie("token", jwtToken, { 
-                maxAge: 30 * 24 * 60 * 60 * 1000, // 1 Month
-                httpOnly: true,
-                secure: process.env.NODE_ENV === 'production',
-                sameSite: 'lax'
-            });
-            // res.redirect("/");
-            res.json({ redirect: "/" }); 
-        }
-        else {
-            res.json({error: "Bad request"});
-            return;
-        }
+    // CSRF, but it's fine here, nothing bad can be done.
+    const user = await getUserByUsername(req.query.user);
+    if (!user) {
+        res.json({error: "User not found"});
+        return;
     }
-    catch (e) {
-        res.send("Error");
-        console.log(e);
+    
+    if (user.verificationToken && validatePassword(req.query.token, user.salt, user.verificationToken)) {
+        await Users.findOneAndUpdate(
+            { username: req.query.user },
+            { 
+                $unset: { verificationToken: "" },
+                $set: { 
+                    verified: true 
+                }
+            }
+        );
+        
+        // Get updated user and create JWT
+        const updatedUser = await getUserByUsername(req.query.user);
+        const jwtToken = createToken(updatedUser);
+        
+        res.cookie("username", req.query.user, { 
+            maxAge: 30 * 24 * 60 * 60 * 1000 // 1 Month
+        });
+        res.cookie("token", jwtToken, { 
+            maxAge: 30 * 24 * 60 * 60 * 1000, // 1 Month
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax'
+        });
+        res.json({ redirect: `/user/${encodeURIComponent(req.query.user)}` }); 
+    }
+    else {
+        res.json({error: "Bad request"});
+        return;
     }
 });
-site.get('/deleteMii', async (req, res) => { // TODO: csrf here, make post
+site.post('/deleteMii', async (req, res) => { // TODO: csrf here, make post
+    if (!req.user) {
+        res.json({error: "Not logged in"});
+        return;
+    }
+    
+    const isModerator = canModerate(req.user);
+    const miiId = req.body.id;
+    
+    // Try to find the Mii (could be public or private)
+    const mii = await getMiiById(miiId, true);
+    const uploader = await getUserByUsername(mii.uploader);
+    
+    if (!mii) {
+        res.json({error: "Mii not found"});
+        return;
+    }
+    
+    // Check permissions
+    const canDelete = mii.uploader === req.user.username || isModerator;
+    
+    if (!canDelete) {
+        res.json({error: "Permission denied"});
+        return;
+    }
+    
+    var d = new Date();
+    const imgPath = mii.private ? `./static/privateMiiImgs/${mii.id}.png` : `./static/miiImgs/${mii.id}.png`;
+    const qrPath = mii.private ? `./static/privateMiiQRs/${mii.id}.png` : `./static/miiQRs/${mii.id}.png`;
+    
+    let miiImageData;
     try {
-        if (!req.user) {
-            res.json({error: "Not logged in"});
-            return;
-        }
-        
-        const isModerator = canModerate(req.user);
-        const miiId = req.query.id;
-        
-        // Try to find the Mii (could be public or private)
-        const mii = await getMiiById(miiId, true);
-        const uploader = await getUserByUsername(mii.uploader);
-        
-        if (!mii) {
-            res.json({error: "Mii not found"});
-            return;
-        }
-        
-        // Check permissions
-        const canDelete = mii.uploader === req.user.username || isModerator;
-        
-        if (!canDelete) {
-            res.json({error: "Permission denied"});
-            return;
-        }
-        
-        var d = new Date();
-        const imgPath = mii.private ? `./static/privateMiiImgs/${mii.id}.png` : `./static/miiImgs/${mii.id}.png`;
-        const qrPath = mii.private ? `./static/privateMiiQRs/${mii.id}.png` : `./static/miiQRs/${mii.id}.png`;
-        
-        let miiImageData;
-        try {
-            miiImageData = fs.readFileSync(imgPath);
-        } catch(e) {
-            miiImageData = null;
-        }
+        miiImageData = fs.readFileSync(imgPath);
+    } catch(e) {
+        miiImageData = null;
+    }
 
-        const attachments = miiImageData ? [{
-            data: miiImageData,
-            filename: `${mii.id}.png`,
-            contentType: 'image/png'
-        }] : [];
+    const attachments = miiImageData ? [{
+        data: miiImageData,
+        filename: `${mii.id}.png`,
+        contentType: 'image/png'
+    }] : [];
 
-        makeReport(JSON.stringify({
-            embeds: [{
-                "type": "rich",
-                "title": (mii.official ? "Official " : "") + (mii.private ? "Private " : "Published ") + `Mii Deleted by ` + req.cookies.username,
-                "description": mii.desc,
-                "color": mii.private ? 0xff6600 : 0xff0000,
-                "fields": [
-                    {
-                        "name": `Mii Name`,
-                        "value": mii.meta?.name,
-                        "inline": true
-                    },
-                    {
-                        "name": `${mii.official ? "Uploaded" : "Made"} by`,
-                        "value": `[${mii.uploader}](https://infinimii.com/user/${encodeURIComponent(mii.uploader)})`,
-                        "inline": true
-                    },
-                    {
-                        "name": `Mii Creator Name (embedded in Mii file)`,
-                        "value": mii.meta.creatorName,
-                        "inline": true
-                    }
-                ],
-                ...(miiImageData ? {
-                    "image": {
-                        "url": `attachment://${mii.id}.png`
-                    }
-                } : {}),
-                "footer": {
-                    "text": `Deleted at ${d.getHours()}:${d.getMinutes()}, ${d.toDateString()} UTC`
+    makeReport(JSON.stringify({
+        embeds: [{
+            "type": "rich",
+            "title": (mii.official ? "Official " : "") + (mii.private ? "Private " : "Published ") + `Mii Deleted by ` + req.cookies.username,
+            "description": mii.desc,
+            "color": mii.private ? 0xff6600 : 0xff0000,
+            "fields": [
+                {
+                    "name": `Mii Name`,
+                    "value": mii.meta?.name,
+                    "inline": true
+                },
+                {
+                    "name": `${mii.official ? "Uploaded" : "Made"} by`,
+                    "value": `[${mii.uploader}](https://infinimii.com/user/${encodeURIComponent(mii.uploader)})`,
+                    "inline": true
+                },
+                {
+                    "name": `Mii Creator Name (embedded in Mii file)`,
+                    "value": mii.meta.creatorName,
+                    "inline": true
                 }
-            }]
-        }), attachments);
-        
-        // Delete from database
-        await Miis.findOneAndDelete({ id: miiId });
-        
-        // Delete files
-        try { fs.unlinkSync(imgPath); } catch(e) {}
-        try { fs.unlinkSync(qrPath); } catch(e) {}
-        
-        res.json({ okay: true });
-        
-        if(mii.uploader!==uploader.username) sendEmail(uploader.email,`Mii Deleted - InfiniMii`,`Hi ${mii.uploader}, one of your Miis "${mii.meta.name}" has been deleted by a Moderator. You can reply to this email to receive support.`);
-    }
-    catch (e) {
-        console.error('Delete Mii error:', e);
-        res.json({error: "Server error"});
-    }
+            ],
+            ...(miiImageData ? {
+                "image": {
+                    "url": `attachment://${mii.id}.png`
+                }
+            } : {}),
+            "footer": {
+                "text": `Deleted at ${d.getHours()}:${d.getMinutes()}, ${d.toDateString()} UTC`
+            }
+        }]
+    }), attachments);
+    
+    // Delete from database
+    await Miis.findOneAndDelete({ id: miiId });
+    
+    // Delete files
+    try { fs.unlinkSync(imgPath); } catch(e) {}
+    try { fs.unlinkSync(qrPath); } catch(e) {}
+    
+    res.json({ okay: true });
+    
+    if(mii.uploader!==uploader.username) sendEmail(uploader.email,`Mii Deleted - InfiniMii`,`Hi ${mii.uploader}, one of your Miis "${mii.meta.name}" has been deleted by a Moderator. You can reply to this email to receive support.`);
 });
 // Update Mii Field (Moderator only)
 site.post('/updateMiiField', requireAuth, requireRole(ROLES.MODERATOR), async (req, res) => {
@@ -1902,43 +1893,38 @@ site.post('/updateMiiField', requireAuth, requireRole(ROLES.MODERATOR), async (r
     }
 });
 // Regenerate QR Code (Moderator only)
-site.get('/regenerateQR', requireAuth, requireRole(ROLES.MODERATOR), async (req, res) => {
-    try {
-        const { id } = req.query;
-        const mii = await getMiiById(id);
+site.post('/regenerateQR', requireAuth, requireRole(ROLES.MODERATOR), async (req, res) => {
+    const { id } = req.body;
+    const mii = await getMiiById(id);
 
-        if (!mii) {
-            return res.json({ error: 'Mii not found' });
-        }
-
-        // Regenerate the QR code
-        await miijs.write3DSQR(mii, `./static/miiQRs/${id}.png`);
-
-        // Log to Discord
-        makeReport(JSON.stringify({
-            embeds: [{
-                type: 'rich',
-                title: '🔄 QR Code Regenerated',
-                description: `Moderator ${req.cookies.username} regenerated QR code`,
-                color: 0x00AFF0,
-                fields: [
-                    {
-                        name: 'Mii',
-                        value: `[${mii.meta.name}](https://infinimii.com/mii/${id})`,
-                        inline: true
-                    }
-                ],
-                thumbnail: {
-                    url: `https://infinimii.com/miiImgs/${id}.png`
-                }
-            }]
-        }));
-
-        res.json({ okay: true });
-    } catch (e) {
-        console.error('Error regenerating QR:', e);
-        res.json({ error: 'Server error' });
+    if (!mii) {
+        return res.json({ error: 'Mii not found' });
     }
+
+    // Regenerate the QR code
+    await miijs.write3DSQR(mii, `./static/miiQRs/${id}.png`);
+
+    // Log to Discord
+    makeReport(JSON.stringify({
+        embeds: [{
+            type: 'rich',
+            title: '🔄 QR Code Regenerated',
+            description: `Moderator ${req.cookies.username} regenerated QR code`,
+            color: 0x00AFF0,
+            fields: [
+                {
+                    name: 'Mii',
+                    value: `[${mii.meta.name}](https://infinimii.com/mii/${id})`,
+                    inline: true
+                }
+            ],
+            thumbnail: {
+                url: `https://infinimii.com/miiImgs/${id}.png`
+            }
+        }]
+    }));
+
+    res.json({ okay: true });
 });
 // Add Role to User (Admin only)
 site.post('/addUserRole', requireAuth, requireRole(ROLES.ADMINISTRATOR), async (req, res) => {
@@ -2425,6 +2411,7 @@ site.get('/sitemap.xml', async (req, res) => {
 
 // Mii-specific sitemap (separate for better organization)
 site.get('/sitemap-miis.xml', async (req, res) => {
+    // TODO: I believe that this xml must be linked to by the first one
     const urls = [];
     
     // Add all published Miis
@@ -2458,6 +2445,7 @@ site.get('/sitemap-miis.xml', async (req, res) => {
 
 // User profiles sitemap
 site.get('/sitemap-users.xml', async (req, res) => {
+    // TODO: I believe that this xml must be linked to by the first one
     const urls = [];
     
     const allUsers = await getAllUsers();
@@ -2477,6 +2465,7 @@ site.get('/sitemap-users.xml', async (req, res) => {
 
 // Sitemap index
 site.get('/sitemap-index.xml', async (req, res) => {
+    // TODO: I believe that this xml must be linked to by the first one
     let xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
     xml += '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n';
     
@@ -2961,80 +2950,74 @@ site.post('/uploadStudioMii', requireAuth, async (req, res) => {
 
 // Download Mii in various formats
 site.get('/downloadMii', async (req, res) => {
-    try {
-        const miiId = req.query.id;
-        const format = req.query.format;
+    const miiId = req.query.id;
+    const format = req.query.format;
+    
+    const mii = await getMiiById(miiId, false);
+    if (!mii) {
+        res.json({error: "Invalid Mii ID"});
+        return;
+    }
+    const miiName = mii.meta.name.replace(/[^a-z0-9]/gi, '_');
+    
+    if (format === 'qr' || format === '3dsqr') {
+        // Download QR code
+        const qrPath = "./static/miiQRs/" + miiId + ".png";
+        res.setHeader('Content-Disposition', `attachment; filename="${miiName}_QR.png"`);
+        res.sendFile(qrPath, { root: path.join(__dirname, "./") });
         
-        const mii = await getMiiById(miiId, false);
-        if (!mii) {
-            res.json({error: "Invalid Mii ID"});
-            return;
-        }
-        const miiName = mii.meta.name.replace(/[^a-z0-9]/gi, '_');
+    }
+    else if (format === '3dsbin' || format === '3dsbin_decrypted') {
+        // Download decrypted 3DS bin
+        const qrPath = "./static/miiQRs/" + miiId + ".png";
+        const binData = await miijs.read3DSQR(qrPath, true);
         
-        if (format === 'qr' || format === '3dsqr') {
-            // Download QR code
-            const qrPath = "./static/miiQRs/" + miiId + ".png";
-            res.setHeader('Content-Disposition', `attachment; filename="${miiName}_QR.png"`);
-            res.sendFile(qrPath, { root: path.join(__dirname, "./") });
-            
-        }
-        else if (format === '3dsbin' || format === '3dsbin_decrypted') {
-            // Download decrypted 3DS bin
-            const qrPath = "./static/miiQRs/" + miiId + ".png";
-            const binData = await miijs.read3DSQR(qrPath, true);
-            
-            res.setHeader('Content-Disposition', `attachment; filename="${miiName}_decrypted.bin"`);
-            res.setHeader('Content-Type', 'application/octet-stream');
-            res.send(binData);
-            
-        }
-        else if (format === '3dsbin_encrypted') {
-            // Download encrypted 3DS bin (from QR)
-            const qrPath = "./static/miiQRs/" + miiId + ".png";
-            // Read QR and extract the encrypted portion
-            // This requires reading the QR image and extracting the data payload
-            // For now, we'll create a new encrypted QR and extract from it
-            const tempQR = "./static/temp/" + await genId() + ".png";
-            await miijs.write3DSQR(mii, tempQR);
-            
-            // Read the encrypted data from the QR
-            // This is a placeholder - you may need to implement QR reading
-            const encryptedData = await miijs.read3DSQR(tempQR, true);
-            
-            try { fs.unlinkSync(tempQR); } catch (e) { }
-            
-            res.setHeader('Content-Disposition', `attachment; filename="${miiName}_encrypted.bin"`);
-            res.setHeader('Content-Type', 'application/octet-stream');
-            res.send(encryptedData);
-            
-        }
-        else if (format === 'wii' || format === 'wiibin') {
-            // Convert to Wii and download
-            const wiiMii = miijs.convertMii(mii, 'wii');
-            const binData = await miijs.writeWiiBin(wiiMii);
-            
-            res.setHeader('Content-Disposition', `attachment; filename="${miiName}.mii"`);
-            res.setHeader('Content-Type', 'application/octet-stream');
-            res.send(binData);
-            
-        }
-        else if (format === 'studio') {
-            // Convert to Studio format and return as text
-            const studioCode = miijs.convertMiiToStudio(mii);
-            
-            res.setHeader('Content-Disposition', `attachment; filename="${miiName}_studio.txt"`);
-            res.setHeader('Content-Type', 'text/plain');
-            res.send(studioCode);
-            
-        }
-        else {
-            res.json({error: "Invalid format specified"});
-        }
+        res.setHeader('Content-Disposition', `attachment; filename="${miiName}_decrypted.bin"`);
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.send(binData);
         
-    } catch (e) {
-        console.error('Error downloading Mii:', e);
-        res.json({error: "Failed to download Mii: " + e.message});
+    }
+    else if (format === '3dsbin_encrypted') {
+        // Download encrypted 3DS bin (from QR)
+        const qrPath = "./static/miiQRs/" + miiId + ".png";
+        // Read QR and extract the encrypted portion
+        // This requires reading the QR image and extracting the data payload
+        // For now, we'll create a new encrypted QR and extract from it
+        const tempQR = "./static/temp/" + await genId() + ".png";
+        await miijs.write3DSQR(mii, tempQR);
+        
+        // Read the encrypted data from the QR
+        // This is a placeholder - you may need to implement QR reading
+        const encryptedData = await miijs.read3DSQR(tempQR, true);
+        
+        try { fs.unlinkSync(tempQR); } catch (e) { }
+        
+        res.setHeader('Content-Disposition', `attachment; filename="${miiName}_encrypted.bin"`);
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.send(encryptedData);
+        
+    }
+    else if (format === 'wii' || format === 'wiibin') {
+        // Convert to Wii and download
+        const wiiMii = miijs.convertMii(mii, 'wii');
+        const binData = await miijs.writeWiiBin(wiiMii);
+        
+        res.setHeader('Content-Disposition', `attachment; filename="${miiName}.mii"`);
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.send(binData);
+        
+    }
+    else if (format === 'studio') {
+        // Convert to Studio format and return as text
+        const studioCode = miijs.convertMiiToStudio(mii);
+        
+        res.setHeader('Content-Disposition', `attachment; filename="${miiName}_studio.txt"`);
+        res.setHeader('Content-Type', 'text/plain');
+        res.send(studioCode);
+        
+    }
+    else {
+        res.json({error: "Invalid format specified"});
     }
 });
 
@@ -3382,13 +3365,13 @@ site.get('/manageCategories', requireAuth, requireRole(ROLES.RESEARCHER), async 
         res.send(str);
     });
 });
-site.get('/changePfp', requireAuth, async (req, res) => {
-    if (req.query.id?.length > 0) {
-        const mii = await getMiiById(req.query.id);
+site.post('/changePfp', requireAuth, async (req, res) => {
+    if (req.body.id?.length > 0) {
+        const mii = await getMiiById(req.body.id);
         if (mii) {
             await Users.findOneAndUpdate(
                 { username: req.cookies.username },
-                { $set: { miiPfp: req.query.id } }
+                { $set: { miiPfp: req.body.id } }
             );
             res.json({ okay: true });
         } else {
@@ -3399,8 +3382,8 @@ site.get('/changePfp', requireAuth, async (req, res) => {
         res.json({error: "Invalid Mii ID"});
     }
 });
-site.get('/changeUser', requireAuth, async (req, res) => {    
-    const newUsername = req.query.newUser;
+site.post('/changeUser', requireAuth, async (req, res) => {    
+    const newUsername = req.body.newUser;
     const oldUsername = req.cookies.username;
     const existingUser = await getUserByUsername(newUsername);
     
@@ -3443,8 +3426,8 @@ site.get('/changeUser', requireAuth, async (req, res) => {
         res.json({error: "Username invalid"});
     }
 });
-site.get('/changeHighlightedMii', requireAuth, requireRole(ROLES.MODERATOR), async (req, res) => {    
-    const miiId = req.query.id;
+site.post('/changeHighlightedMii', requireAuth, requireRole(ROLES.MODERATOR), async (req, res) => {    
+    const miiId = req.body.id;
     if (miiId?.length > 0) {
         const mii = await getMiiById(miiId, false);
         if (!mii) {
@@ -3515,13 +3498,13 @@ site.get('/changeHighlightedMii', requireAuth, requireRole(ROLES.MODERATOR), asy
         res.json({error: "Invalid Mii ID"});
     }
 });
-site.get('/reportMii', async (req,res)=>{ // TODO: add endpoints that cause stuff should be POST, not GET to prevent CSRF
-    const mii = await getMiiById(req.query.id, false);
+site.post('/reportMii', async (req,res)=>{
+    const mii = await getMiiById(req.body.id, false);
     makeReport(JSON.stringify({
         embeds: [{
             "type": "rich",
             "title": (mii.official ? "Official " : "") + `Mii has been reported`,
-            "description": req.query.what,
+            "description": req.body.what,
             "color": 0xff0000,
             "fields": [
                 {
@@ -4086,11 +4069,12 @@ site.post('/updateOfficialCategories', requireAuth, requireRole(ROLES.RESEARCHER
         res.json({ error: 'Server error' });
     }
 });
+
 // Get all official categories (nested structure)
 site.get('/getOfficialCategories', async (req, res) => {
     try {
         const settings = await getSettings();
-        res.json({ categories: settings.officialCategories.categories });
+        res.json({ categories: settings.officialCategories });
     } catch (e) {
         console.error('Error getting categories:', e);
         res.json({ error: 'Server error' });
@@ -4453,16 +4437,6 @@ site.post('/moveCategory', requireAuth, requireRole(ROLES.RESEARCHER), async (re
         res.json({ categories: settings.officialCategories.categories, updatedMiis: totalUpdated });
     } catch (e) {
         console.error('Error moving category:', e);
-        res.json({ error: 'Server error' });
-    }
-});
-// Get all official categories (for building forms)
-site.get('/getOfficialCategories', async (req, res) => {
-    try {
-        const settings = await getSettings();
-        res.json({ categories: settings.officialCategories });
-    } catch (e) {
-        console.error('Error getting categories:', e);
         res.json({ error: 'Server error' });
     }
 });
