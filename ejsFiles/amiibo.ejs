@@ -291,6 +291,7 @@
                 try {
                     const response = await fetch('/extractMiiFromAmiibo', {
                         method: 'POST',
+                        headers: { "Content-Type": "application/json" },
                         body: formData
                     });
                     
@@ -327,6 +328,7 @@
                 try {
                     const response = await fetch('/insertMiiIntoAmiibo', {
                         method: 'POST',
+                        headers: { "Content-Type": "application/json" },
                         body: formData
                     });
                     

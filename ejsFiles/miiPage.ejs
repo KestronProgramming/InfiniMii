@@ -116,7 +116,9 @@
 
                                 async function loadCategoriesForEditor() {
                                     try {
-                                        const response = await fetch('/getOfficialCategories');
+                                        const response = await fetch('/getOfficialCategories', {
+                                            headers: { "Content-Type": "application/json" },
+                                        });
                                         const data = await response.json();
                                         
                                         if (!data.error) {
@@ -683,7 +685,9 @@
             }
             function report(){
                 var what=prompt("What would you like to report this Mii for?");
-                fetch("/reportMii?id=<%= mii.id %>&what="+encodeURIComponent(what));
+                fetch("/reportMii?id=<%= mii.id %>&what="+encodeURIComponent(what), {
+                    headers: { "Content-Type": "application/json" },
+                });
             }
             let currentInstructionsFormat = '3ds';
             let currentInstructionsData = null;
@@ -708,7 +712,9 @@
                 const originalText = statusEl.textContent;
                 
                 try {
-                    const response = await fetch('/getStudioCode?id=<%= mii.id %>');
+                    const response = await fetch('/getStudioCode?id=<%= mii.id %>', {
+                        headers: { "Content-Type": "application/json" },
+                    });
                     const result = await response.json();
                     
                     if (!result.error) {
@@ -758,7 +764,9 @@
                 contentEl.innerHTML = '<p style="text-align: center; color: var(--text-2);">Loading...</p>';
                 
                 try {
-                    const response = await fetch(`/getInstructions?id=<%= mii.id %>&format=${currentInstructionsFormat}&full=${full}`);
+                    const response = await fetch(`/getInstructions?id=<%= mii.id %>&format=${currentInstructionsFormat}&full=${full}`, {
+                        headers: { "Content-Type": "application/json" },
+                    });
                     const result = await response.json();
                     
                     if (!result.error) {
@@ -903,9 +911,7 @@
                     try {
                         const response = await fetch('/updateMiiField', {
                             method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                            },
+                            headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({
                                 id: '<%= mii.id %>',
                                 field: field,
@@ -938,7 +944,9 @@
                     statusEl.style.color = '#FFA500';
 
                     try {
-                        const response = await fetch('/regenerateQR?id=<%= mii.id %>');
+                        const response = await fetch('/regenerateQR?id=<%= mii.id %>', {
+                            headers: { "Content-Type": "application/json" },
+                        });
                         const result = await response.json();
                         
                         if (!result.error) {
@@ -973,7 +981,9 @@
                     }
 
                     try {
-                        const response = await fetch('/deleteMii?id=<%= mii.id %>');
+                        const response = await fetch('/deleteMii?id=<%= mii.id %>', {
+                            headers: { "Content-Type": "application/json" },
+                        });
                         const result = await response.json();
                         
                         if (!result.error) {
@@ -999,9 +1009,7 @@
                     try {
                         const response = await fetch('/toggleMiiOfficial', {
                             method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                            },
+                            headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({
                                 id: '<%= mii.id %>',
                                 official: isOfficial

@@ -50,7 +50,9 @@
 
             async function loadCategories() {
                 try {
-                    const response = await fetch('/getOfficialCategories');
+                    const response = await fetch('/getOfficialCategories', {
+                        headers: { "Content-Type": "application/json" },
+                    });
                     const data = await response.json();
                     
                     if (!data.error) {
@@ -167,7 +169,7 @@
                 try {
                     const response = await fetch('/addCategory', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ name, color, parentPath: null })
                     });
                     

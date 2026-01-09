@@ -88,9 +88,7 @@
                 try {
                     const response = await fetch('/publishMii', {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
+                        headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ miiId })
                     });
                     
@@ -114,7 +112,9 @@
                 }
                 
                 try {
-                    const response = await fetch('/deleteMii?id=' + miiId);
+                    const response = await fetch('/deleteMii?id=' + miiId, {
+                        headers: { "Content-Type": "application/json" },
+                    });
                     const data = await response.text();
                     
                     if (data.includes('true')) {

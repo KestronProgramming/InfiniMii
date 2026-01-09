@@ -17,7 +17,15 @@ function deleteMii(id){
 	if(youSure){
 		fetch("/deleteMii?id="+id).then(d=>d.json()).then(d=>{
 			if(d.error){
-				alert(d.error); // TODO: use error field, not alert.
+				const errorDiv = document.getElementById('delete-error-message');
+				if (errorDiv) {
+					errorDiv.textContent = d.error;
+					errorDiv.className = 'form-message error';
+					errorDiv.style.display = 'block';
+				} else {
+					// Ideally not used
+					alert(d.error);
+				}
 			}
 			else{
 				document.getElementById(id).remove();
@@ -34,4 +42,113 @@ function highlightedMiiChange(){
             alert(d.error);
         }
     });
+}
+
+/**
+ * Standardized form submission handler
+ * @param {Event} e - The form submit event
+ * @param {string} url - The endpoint URL to submit to
+ * @param {string} loadingText - Text to display on submit button during loading
+ * @param {string} errorDivId - ID of the div to display error/success messages
+ * @param {Object} options - Additional options
+ * @param {Object} options.headers - Custom headers (default: none for FormData)
+ * @param {Function} options.bodyFormatter - Function to format FormData before sending
+ * @param {Function} options.onSuccess - Custom success handler (result, messageDiv, response)
+ * @param {boolean} options.handleFileDownload - Whether this endpoint returns a file download
+* @param {String} options.next - Where to go instead of response.redirect
+ */
+async function handleFormSubmit(e, url, loadingText, errorDivId, options = {}) {
+    e.preventDefault();
+    
+    const form = e.target;
+    const formData = new FormData(form);
+    const submitBtn = form.querySelector('input[type="submit"], button[type="submit"]');
+    const originalText = submitBtn.value || submitBtn.textContent;
+    const messageDiv = document.getElementById(errorDivId);
+    
+    // Clear any previous messages
+    messageDiv.style.display = 'none';
+    messageDiv.textContent = '';
+    messageDiv.className = 'form-message';
+    
+    // Update button state
+    if (submitBtn.tagName === 'INPUT') {
+        submitBtn.value = loadingText;
+    } else {
+        submitBtn.textContent = loadingText;
+    }
+    submitBtn.disabled = true;
+    
+    try {
+        const fetchOptions = {
+            method: 'POST',
+            body: options.bodyFormatter ? options.bodyFormatter(formData) : formData
+        };
+        
+        if (options.headers) {
+            fetchOptions.headers = options.headers;
+        }
+        
+        const response = await fetch(url, fetchOptions);
+        
+        // Handle file downloads
+        if (options.handleFileDownload) {
+            const contentType = response.headers.get('content-type');
+            const contentDisposition = response.headers.get('content-disposition');
+            
+            if (contentDisposition && contentDisposition.includes('attachment')) {
+                const blob = await response.blob();
+                const downloadUrl = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = downloadUrl;
+                const filename = contentDisposition.split('filename=')[1].replace(/"/g, '');
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(downloadUrl);
+                document.body.removeChild(a);
+                
+                // Reset button
+                if (submitBtn.tagName === 'INPUT') {
+                    submitBtn.value = originalText;
+                } else {
+                    submitBtn.textContent = originalText;
+                }
+                submitBtn.disabled = false;
+                return;
+            }
+        }
+        
+        const result = await response.json();
+        
+        if (result.error) {
+            messageDiv.textContent = result.error;
+            messageDiv.className = 'form-message error';
+            messageDiv.style.display = 'block';
+        } else {
+            // Success
+            if (options.onSuccess) {
+                options.onSuccess(result, messageDiv, response);
+            } else if (result.redirect) {
+                window.location.href = options?.next || result.redirect;
+            } else if (result.message) {
+                messageDiv.textContent = result.message;
+                messageDiv.className = 'form-message success';
+                messageDiv.style.display = 'block';
+            }
+        }
+    } catch (error) {
+        console.error('Form submission error:', error);
+        messageDiv.textContent = 'An error occurred. Please try again.';
+        messageDiv.className = 'form-message error';
+        messageDiv.style.display = 'block';
+    } finally {
+        // Reset button if not redirecting
+        if (submitBtn.tagName === 'INPUT') {
+            submitBtn.value = originalText;
+        } else {
+            submitBtn.textContent = originalText;
+        }
+        submitBtn.disabled = false;
+    }
 }

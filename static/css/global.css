@@ -585,6 +585,33 @@ fieldset a:hover {
     text-decoration: underline;
 }
 
+
+
+/* [CladeSS] Form message styles */
+.form-message {
+    padding: 12px 15px;
+    border-radius: 6px;
+    margin-bottom: 15px;
+    font-size: 14px;
+    line-height: 1.5;
+    display: none;
+}
+.form-message.error {
+    color: #d32f2f;
+    background: #ffebee;
+    border: 1px solid #ef5350;
+}
+.form-message.success {
+    color: #2e7d32;
+    background: #e8f5e9;
+    border: 1px solid #66bb6a;
+}
+.form-message.warning {
+    color: #f57c00;
+    background: #fff3e0;
+    border: 1px solid #ffb74d;
+}
+
 @keyframes wipe-right {
     0% {
         clip-path: polygon(0 0, 0% 0, 0% 0%, 0 0%);

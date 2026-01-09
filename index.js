@@ -1132,7 +1132,11 @@ site.use(async (req, res, next) => {
             if (settings.bannedIPs.some(ip => clientIPs.includes(ip))) {
                 res.clearCookie('username');
                 res.clearCookie('token');
-                return res.json({error: 'Your IP address has been permanently banned.'});
+                if (req.accepts('html')) {
+                    return await sendError(res, req, 'Your IP address has been permanently banned.', 403);
+                } else {
+                    return res.status(403).json({error: 'Your IP address has been permanently banned.'});
+                }
             }
             
             // Check user ban
@@ -1144,10 +1148,20 @@ site.use(async (req, res, next) => {
                 
                 if (req.user.role === ROLES.TEMP_BANNED && req.user.banExpires) {
                     const timeLeft = Math.ceil((req.user.banExpires - Date.now()) / (1000 * 60 * 60));
-                    return res.json({error: `You are temporarily banned. Time remaining: ${timeLeft} hours. Reason: ${req.user.banReason || 'No reason provided'}`});
+                    const message = `You are temporarily banned. Time remaining: ${timeLeft} hours. Reason: ${req.user.banReason || 'No reason provided'}`;
+                    if (req.accepts('html')) {
+                        return await sendError(res, req, message, 403);
+                    } else {
+                        return res.status(403).json({error: message});
+                    }
                 }
                 else {
-                    return res.send(`You are permanently banned. Reason: ${req.user.banReason || 'No reason provided'}`);
+                    const message = `You are permanently banned. Reason: ${req.user.banReason || 'No reason provided'}`;
+                    if (req.accepts('html')) {
+                        return await sendError(res, req, message, 403);
+                    } else {
+                        return res.status(403).json({error: message});
+                    }
                 }
             }
         }
@@ -1263,7 +1277,8 @@ site.use('/static', express.static(path.join(__dirname, 'static'), {
 async function requireAuth(req, res, next) {
     if (!req.user) {
         // TODO_AUTH: redirect to /login with a ?next
-        return sendError(res, req, "Authentication required.", 401);
+        return res.redirect(`/login?next=${encodeURIComponent(req.originalUrl)}`);
+        // return sendError(res, req, "Authentication required.", 401);
     }
     next();
 }
@@ -1614,7 +1629,7 @@ site.get('/transferInstructions', async (req, res) => {
         res.send(str)
     });
 });
-site.get('/upload', async (req, res) => {
+site.get('/upload', requireAuth, async (req, res) => {
     let toSend = await getSendables(req);
     toSend.fromAmiibo=req.query?.fromAmiibo;
     // Check if coming from Amiibo extraction
@@ -2848,12 +2863,19 @@ site.post('/uploadStudioMii', requireAuth, async (req, res) => {
         
         // Validate hex format
         if (!/^[0-9a-fA-F]+$/.test(studioCode)) {
-            res.json({error: "Invalid Studio code format"});
+            res.json({error: "Invalid Studio code format. Please enter a valid hex code from Mii Studio."});
             return;
         }
         
         // Convert Studio to 3DS Mii
-        const mii = miijs.convertStudioToMii(studioCode);
+        let mii;
+        try {
+            mii = miijs.convertStudioToMii(studioCode);
+        } catch (e) {
+            console.error('Error converting Studio code:', e);
+            res.json({error: `Failed to convert Studio code. Please verify your code is correct and try again. ${e.message || ''}`});
+            return;
+        }
         
         mii.id = await genId();
         mii.uploadedOn = Date.now();
@@ -3260,7 +3282,12 @@ site.get('/signup', async (req, res) => {
     });
 });
 site.get('/login', async (req, res) => {
-    ejs.renderFile('./ejsFiles/login.ejs', await getSendables(req), {}, function(err, str) {
+    const next = req.query.next || '/';
+
+    ejs.renderFile('./ejsFiles/login.ejs', {
+        next: next,
+        ...(await getSendables(req))
+    }, {}, function(err, str) {
         if (err) {
             res.send(err);
             console.log(err);
@@ -3855,60 +3882,67 @@ site.post('/uploadMii', requireAuth, upload.single('mii'), async (req, res) => {
         // TODO: catch errors here and request that they make sure they selected the right upload type
 
         let mii;
-        if (req.body.type === "wii") {
-            // Read Wii Mii and convert TO 3DS format
-            const wiiMii = await miijs.readWiiBin("./uploads/" + req.file.filename);
-            mii = miijs.convertMii(wiiMii, "3ds"); // Convert TO 3DS
-        }
-        else if (req.body.type === "3ds") {
-            mii = await miijs.read3DSQR("./uploads/" + req.file.filename);
-        }
-        else if (req.body.type === "3dsbin") {
-            var binData;
-            if (req.file) {
+        try {
+            if (req.body.type === "wii") {
+                // Read Wii Mii and convert TO 3DS format
+                const wiiMii = await miijs.readWiiBin("./uploads/" + req.file.filename);
+                mii = miijs.convertMii(wiiMii, "3ds"); // Convert TO 3DS
+            }
+            else if (req.body.type === "3ds") {
+                mii = await miijs.read3DSQR("./uploads/" + req.file.filename);
+            }
+            else if (req.body.type === "3dsbin") {
+                var binData;
+                if (req.file) {
+                    try {
+                        // Read the uploaded file as a buffer
+                        binData = fs.readFileSync("./uploads/" + req.file.filename);
+                    } catch (e) {
+                        console.error('Error reading 3DS bin file:', e);
+                        res.json({ error: `Could not read file. Please ensure it's a valid 3DS bin file and try again.` });
+                        try { fs.unlinkSync("./uploads/" + req.file.filename); } catch (e2) { }
+                        return;
+                    }
+                }
+                else {
+                    res.json({ error: 'No file uploaded for 3DS bin' });
+                    return;
+                }
+                mii = await miijs.read3DSQR(binData);
+            }
+            else if (req.body.type === "3dsbin_amiibo") {
+                // Uploading from Amiibo extraction
+                const tempMiiId = req.body.fromAmiibo;
+                const tempBinPath = `./static/temp/${tempMiiId}.bin`;
+
+                if (!fs.existsSync(tempBinPath)) {
+                    res.json({ error: 'Amiibo Mii data not found. Please extract again.' });
+                    return;
+                }
+
                 try {
-                    // Read the uploaded file as a buffer
-                    binData = fs.readFileSync("./uploads/" + req.file.filename);
+                    const binData = fs.readFileSync(tempBinPath);
+                    mii = await miijs.read3DSQR(binData, false);
+
+                    // Clean up temp files
+                    try { fs.unlinkSync(tempBinPath); } catch (e) { }
+                    try { fs.unlinkSync(`./static/miiImgs/${tempMiiId}.png`); } catch (e) { }
+                    try { fs.unlinkSync(`./static/miiQRs/${tempMiiId}.png`); } catch (e) { }
                 } catch (e) {
-                    console.error('Error reading 3DS bin file:', e);
-                    res.json({error: `Invalid 3DS bin file: ${e.message}`});
-                    try { fs.unlinkSync("./uploads/" + req.file.filename); } catch (e2) { }
+                    console.error('Error reading Amiibo Mii:', e);
+                    res.json({ error: `Invalid Amiibo Mii data: ${e.message}` });
                     return;
                 }
             }
-            else{
-                res.json({error: 'No file uploaded for 3DS bin'});
+            else {
+                res.json({ error: 'No valid type specified' });
+                try { fs.unlinkSync("./uploads/" + req.file.filename); } catch (e) { }
                 return;
             }
-            mii = await miijs.read3DSQR(binData);
-        }
-        else if (req.body.type === "3dsbin_amiibo") {
-            // Uploading from Amiibo extraction
-            const tempMiiId = req.body.fromAmiibo;
-            const tempBinPath = `./static/temp/${tempMiiId}.bin`;
-            
-            if (!fs.existsSync(tempBinPath)) {
-                res.json({error: 'Amiibo Mii data not found. Please extract again.'});
-                return;
-            }
-            
-            try {
-                const binData = fs.readFileSync(tempBinPath);
-                mii = await miijs.read3DSQR(binData, false);
-                
-                // Clean up temp files
-                try { fs.unlinkSync(tempBinPath); } catch (e) { }
-                try { fs.unlinkSync(`./static/miiImgs/${tempMiiId}.png`); } catch (e) { }
-                try { fs.unlinkSync(`./static/miiQRs/${tempMiiId}.png`); } catch (e) { }
-            } catch (e) {
-                console.error('Error reading Amiibo Mii:', e);
-                res.json({error: `Invalid Amiibo Mii data: ${e.message}`});
-                return;
-            }
-        }
-        else {
-            res.json({error: 'No valid type specified'});
-            try { fs.unlinkSync("./uploads/" + req.file.filename); } catch (e) { }
+        } catch (e) {
+            console.error('Error processing Mii file:', e);
+            res.json({error: `Failed to process file. Please double-check that you selected the correct file type for your Mii file. ${e.message || ''}`});
+            try { fs.unlinkSync("./uploads/" + req.file.filename); } catch (e2) { }
             return;
         }
 
@@ -3990,8 +4024,8 @@ site.post('/uploadMii', requireAuth, upload.single('mii'), async (req, res) => {
 
     } catch (e) {
         console.error('Error uploading Mii:', e);
-        res.json({error: 'Server error'});
-        try { fs.unlinkSync("./uploads/" + req.file.filename); } catch (e2) { }
+        res.json({error: `Server error while uploading. Please verify you uploaded the right file and try again.`});
+        try { if (req.file) fs.unlinkSync("./uploads/" + req.file.filename); } catch (e2) { }
     }
 });
 // Update Official Mii Categories (Researcher+)
@@ -4578,15 +4612,29 @@ site.post('/convertMii', upload.single('mii'), async (req, res) => {
     try {
         let tempMiiPath = crypto.randomBytes(16).toString('hex'); // TODO: verify convertMii features work after path changes
         let mii;
-        if (req.body.fromType === "3DS/Wii U") {
-            mii = await miijs.read3DSQR("./uploads/" + req.file.filename);
+        
+        try {
+            if (req.body.fromType === "3DS/Wii U") {
+                mii = await miijs.read3DSQR("./uploads/" + req.file.filename);
+            }
+            else if (req.body.fromType === "3DS Bin") {
+                mii = await miijs.read3DSQR(req.body["3dsbin"]);
+            }
+            else if (req.body.fromType === "Wii") {
+                mii = miijs.readWiiBin("./uploads/" + req.file.filename);
+            }
+            else {
+                res.json({error: "Invalid source format specified"});
+                try { fs.unlinkSync("./uploads/" + req.file.filename); } catch (e) { }
+                return;
+            }
+        } catch (e) {
+            console.error('Error reading Mii file:', e);
+            res.json({error: `Failed to read file. Please verify you selected the correct file type for your Mii. ${e.message || ''}`});
+            try { fs.unlinkSync("./uploads/" + req.file.filename); } catch (e2) { }
+            return;
         }
-        if (req.body.fromType === "3DS Bin") {
-            mii = await miijs.read3DSQR(req.body["3dsbin"]);
-        }
-        if (req.body.fromType === "Wii") {
-            mii = miijs.readWiiBin("./uploads/" + req.file.filename);
-        }
+        
         if (req.body.fromType.includes("3DS") && req.body.toType.includes("Wii Mii")) {
             mii = miijs.convertMii(mii, "3ds");
         }
@@ -4623,7 +4671,8 @@ site.post('/convertMii', upload.single('mii'), async (req, res) => {
     }
     catch (e) {
         console.log(e);
-        res.json({error: "Server error"});
+        res.json({error: `Conversion failed. Please verify you selected the right format and uploaded the right file.`});
+        try { if (req.file) fs.unlinkSync("./uploads/" + req.file.filename); } catch (e2) { }
     }
 });
 site.post('/signup', async (req, res) => {
@@ -4710,8 +4759,11 @@ site.post('/login', async (req, res) => {
             // TODO: if email is never validated, the username is lost... give them maybe 24 hours to verify their email before deleting the account...
             return;
         }
+        
+        res.json({ redirect: "/" });
+    } else {
+        res.json({ error: "Invalid username or password" });
     }
-    res.json({ redirect: "/" }); 
 });
 
 site.get("/error", async(req, res) => {
