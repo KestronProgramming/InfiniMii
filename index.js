@@ -24,7 +24,7 @@ import { rateLimit } from 'express-rate-limit'
 import ms from 'ms'
 
 process.env = JSON.parse(fs.readFileSync("./env.json", "utf-8"));
-import { connectionPromise, Mii as Miis, User as Users, Settings } from "./database.js";
+import { connectionPromise, Miis, Users, Settings, ReservedUsername } from "./database.js";
 
 const defaultMiisPerPage = 15;
 const PRIVATE_MII_LIMIT = process.env.privateMiiLimit;
@@ -780,6 +780,8 @@ function hashPassword(password, s) {
     return { salt, hash };
 }
 function validatePassword(password, salt, hash) {
+    if (!password || !salt || !hash) return false;
+    if (typeof password !== 'string' || typeof salt !== 'string' || typeof hash !== 'string') return false;
     return hashPassword(password, salt).hash === hash;
 }
 
@@ -1736,10 +1738,10 @@ site.get('/verify', async (req, res) => {
         const jwtToken = createToken(updatedUser);
         
         res.cookie("username", req.query.user, { 
-            maxAge: 30 * 24 * 60 * 60 * 1000 // 1 Month
+            maxAge: ms("30 days") // 1 Month
         });
         res.cookie("token", jwtToken, { 
-            maxAge: 30 * 24 * 60 * 60 * 1000, // 1 Month
+            maxAge: ms("30 days"), // 1 Month
             httpOnly: true,
             secure: process.env.NODE_ENV === 'production',
             sameSite: 'lax'
@@ -2281,16 +2283,41 @@ site.post('/changeUsername', requireAuth, requireRole(ROLES.MODERATOR), async (r
         if (existing) {
             return res.json({ error: 'Username already taken' });
         }
+        
+        // Check if username is reserved
+        const reserved = await ReservedUsername.findOne({ username: newUsername });
+        if (reserved) {
+            return res.json({ error: 'This username is reserved. Please try choose a different username.' });
+        }
 
         const user = await getUserByUsername(oldUsername);
         if (!user) {
             return res.json({ error: 'User not found' });
         }
+        
+        // Reserve the old username for 30 days (JWT expiry period)
+        const reserveUntil = new Date(Date.now() + ms('30 days'));
+        try {
+            await ReservedUsername.create({
+                username: oldUsername,
+                expiresAt: reserveUntil
+            });
+        } catch (e) {
+            // Ignore duplicate key error - username already reserved
+            if (e.code !== 11000) throw e;
+        }
+        
+        // Increment token version to invalidate old tokens
+        const newTokenVersion = (user.tokenVersion || 0) + 1;
 
         // Update username in User document
         await Users.findOneAndUpdate(
             { username: oldUsername },
-            { $set: { username: newUsername } }
+            { 
+                username: newUsername,
+                tokenVersion: newTokenVersion,
+                lastUsernameChange: Date.now()
+            }
         );
 
         // Update uploader field in all user's Miis
@@ -2302,7 +2329,7 @@ site.post('/changeUsername', requireAuth, requireRole(ROLES.MODERATOR), async (r
         makeReport(JSON.stringify({
             embeds: [{
                 type: 'rich',
-                title: '✏️ Username Changed',
+                title: '✏️ Username Changed (Moderator)',
                 description: `${req.cookies.username} changed a username`,
                 color: 0x00FF00,
                 fields: [
@@ -3316,6 +3343,36 @@ site.get('/login', async (req, res) => {
         res.send(str);
     });
 });
+
+site.get('/requestPasswordReset', async (req, res) => {
+    ejs.renderFile('./ejsFiles/requestPasswordReset.ejs', await getSendables(req), {}, function(err, str) {
+        if (err) {
+            res.send(err);
+            console.log(err);
+            return;
+        }
+        res.send(str);
+    });
+});
+
+site.get('/resetPassword', async (req, res) => {
+    const username = req.query.user;
+    const token = req.query.token;
+    
+    ejs.renderFile('./ejsFiles/resetPassword.ejs', {
+        username: username,
+        token: token,
+        ...(await getSendables(req))
+    }, {}, function(err, str) {
+        if (err) {
+            res.send(err);
+            console.log(err);
+            return;
+        }
+        res.send(str);
+    });
+});
+
 site.get('/logout', async (req, res) => { // TODO: make this a POST request to prevent CSRF
     try {
         await res.clearCookie('username');
@@ -3419,7 +3476,7 @@ site.post('/changePfp', requireAuth, async (req, res) => {
         res.json({error: "Invalid Mii ID"});
     }
 });
-site.post('/changeUser', requireAuth, async (req, res) => {    
+site.post('/changeUser', requireAuth, async (req, res) => {   // change username  
     const newUsername = req.body.newUser;
     const oldUsername = req.cookies.username;
     const existingUser = await getUserByUsername(newUsername);
@@ -3456,7 +3513,7 @@ site.post('/changeUser', requireAuth, async (req, res) => {
                 "url": `https://infinimii.com/user/${encodeURIComponent(newUsername)}`
             }]
         }));
-        res.cookie('username', newUsername, { maxAge: 30 * 24 * 60 * 60 * 1000/*1 Month*/ });
+        res.cookie('username', newUsername, { maxAge: ms("30 days") });
         res.json({ okay: true });
     }
     else {
@@ -3640,7 +3697,19 @@ site.post('/changeEmail', requireAuth, async (req, res) => {
                     tokenVersion: newTokenVersion
                 }
             }
-        ); // TODO_DB: this would brick your account if you send to a false email...
+        ); // TODO_HIGH: this would brick your account if you send to a false email...
+        
+        // Get updated user and create new JWT with new email
+        const updatedUser = await getUserByUsername(req.cookies.username);
+        const newToken = createToken(updatedUser);
+        
+        // Set new JWT token cookie
+        res.cookie('token', newToken, {
+            maxAge: ms("30 days"),
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax'
+        });
 
         makeReport(JSON.stringify({
             embeds: [{
@@ -3699,7 +3768,7 @@ site.post('/changePassword', requireAuth, async (req, res) => {
 
         // Set new JWT token cookie
         res.cookie("token", newToken, { 
-            maxAge: 30 * 24 * 60 * 60 * 1000,
+            maxAge: ms("30 days"),
             httpOnly: true,
             secure: process.env.NODE_ENV === 'production',
             sameSite: 'lax'
@@ -3728,6 +3797,227 @@ site.post('/changePassword', requireAuth, async (req, res) => {
         res.json({ error: 'Server error' });
     }
 });
+
+// Reset Password (User)
+site.post('/resetPassword', async (req, res) => {
+    const { username, token, newPassword } = req.body;
+    
+    if (!username || !token || !newPassword) {
+        return res.json({ error: 'Missing required fields' });
+    }
+            
+    const user = await getUserByUsername(username);
+    if (!user) {
+        return res.json({ error: 'Invalid reset link' });
+    }
+    
+    // Check if token is expired
+    if (!user.resetPasswordExpires || user.resetPasswordExpires < Date.now()) {
+        return res.json({ error: 'Reset link has expired. Please request a new one.' });
+    }
+    
+    // Verify token
+    const tokenHash = hashPassword(token, user.salt).hash;
+    if (tokenHash !== user.resetPasswordToken) {
+        return res.json({ error: 'Invalid reset link' });
+    }
+    
+    // Hash new password and increment token version
+    const newHashed = hashPassword(newPassword, user.salt);
+    const newTokenVersion = (user.tokenVersion || 0) + 1;
+    
+    await Users.findOneAndUpdate(
+        { username: username },
+        { 
+            pass: newHashed.hash,
+            tokenVersion: newTokenVersion,
+            resetPasswordToken: null,
+            resetPasswordExpires: null
+        }
+    );
+    
+    sendEmail(user.email, 'Password Changed - InfiniMii',
+        `Hi ${username},\n\nYour password was successfully reset. If you didn't do this, please reply to this email immediately.\n\nYou can now log in with your new password.`
+    );
+    
+    makeReport(JSON.stringify({
+        embeds: [{
+            type: 'rich',
+            title: '🔒 Password Reset Complete',
+            description: `User ${username} successfully reset their password`,
+            color: 0x00FF00
+        }]
+    }));
+    
+    res.json({ message: 'Password reset successfully! You can now log in with your new password.', redirect: '/login' });
+});
+
+// Request Password Reset
+site.post('/requestPasswordReset', async (req, res) => {
+    try {
+        const { email } = req.body;
+        
+        if (!email || !validator.isEmail(email)) {
+            return res.json({ error: 'Invalid email address' });
+        }
+        
+        const normalizedEmail = validator.normalizeEmail(email);
+        const user = await Users.findOne({ email: normalizedEmail });
+        
+        // Don't reveal if user exists for security
+        if (!user) {
+            return res.json({ message: 'If an account with that email exists, a password reset link has been sent.' });
+        }
+        
+        // Generate reset token
+        const resetToken = genToken();
+        const resetTokenHash = hashPassword(resetToken, user.salt).hash;
+        const resetExpires = Date.now() + ms("1h");
+        
+        await Users.findOneAndUpdate(
+            { username: user.username },
+            { 
+                resetPasswordToken: resetTokenHash,
+                resetPasswordExpires: resetExpires
+            }
+        );
+        
+        const resetLink = `https://infinimii.com/resetPassword?user=${encodeURIComponent(user.username)}&token=${encodeURIComponent(resetToken)}`;
+        
+        sendEmail(normalizedEmail, 'Password Reset - InfiniMii', 
+            `Hi ${user.username},\n` +
+            `\n` +
+            `We received a request to reset your password.\n` +
+            `If you didn't request this, please ignore this email.\n` +
+            `\n` +
+            `${resetLink}\n`
+        );
+        
+        res.json({ message: 'If an account with that email exists, a password reset link has been sent.' });
+    } catch (e) {
+        console.error('Error requesting password reset:', e);
+        res.json({ error: 'Server error' });
+    }
+});
+
+// User Self-Service Username Change
+site.post('/changeSelfUsername', requireAuth, async (req, res) => {
+    try {
+        const { newUsername, password } = req.body;
+        
+        // Verify password
+        if (!validatePassword(password, req.user.salt, req.user.pass)) {
+            return res.json({ error: 'Incorrect password' });
+        }
+        
+        // Validate new username
+        if (!validate(newUsername)) {
+            return res.json({ error: 'Invalid username format. Username must be 3-20 alphanumeric characters or underscores.' });
+        }
+        
+        if (isBad(newUsername)) {
+            return res.json({ error: 'Username contains inappropriate content' });
+        }
+        
+        // Check if username change is allowed (once per month)
+        const lastChange = req.user.lastUsernameChange || 0;
+        const oneMonthAgo = Date.now() - ms("30 days");
+        
+        if (lastChange > oneMonthAgo) {
+            const nextAllowed = new Date(lastChange + ms("30 days"));
+            return res.json({ 
+                error: `You can only change your username once per month. You can change it again on ${nextAllowed.toLocaleDateString()}.` 
+            });
+        }
+        
+        // Check if username is taken
+        const existing = await getUserByUsername(newUsername);
+        if (existing) {
+            return res.json({ error: 'Username already taken' });
+        }
+        
+        // Check if username is reserved
+        const reserved = await ReservedUsername.findOne({ username: newUsername });
+        if (reserved) {
+            return res.json({ error: 'This username is temporarily unavailable. Please try again later or choose a different username.' });
+        }
+        
+        // All checks fine, swap usernames
+        const oldUsername = req.user.username;
+        
+        // Reserve the old username for 30 days (JWT expiry period)
+        const reserveUntil = new Date(Date.now() + ms("30 days"));
+        await ReservedUsername.create({
+            username: oldUsername,
+            expiresAt: reserveUntil
+        }).catch(()=>{});
+        
+        // Increment token version to invalidate old tokens
+        const newTokenVersion = (req.user.tokenVersion || 0) + 1;
+        
+        // Update username
+        await Users.findOneAndUpdate(
+            { username: oldUsername },
+            { 
+                username: newUsername,
+                lastUsernameChange: Date.now(),
+                tokenVersion: newTokenVersion
+            }
+        );
+        
+        // Update uploader field in all user's Miis
+        await Miis.updateMany(
+            { uploader: oldUsername },
+            { uploader: newUsername }
+        );
+        
+        // Get updated user and create new JWT
+        const updatedUser = await getUserByUsername(newUsername);
+        const newToken = createToken(updatedUser);
+        
+        // Set new JWT token and username cookies
+        res.cookie('token', newToken, {
+            maxAge: ms("30 days"),
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax'
+        });
+        res.cookie('username', newUsername, {
+            maxAge: ms("30 days")
+        });
+        
+        sendEmail(req.user.email, 'Username Changed - InfiniMii',
+            `Hi ${oldUsername},\n\nYour username has been changed to ${newUsername}. This is what you'll use to log in from now on.\n\nYou won't be able to change your username again for 30 days.\n\nIf you didn't make this change, please reply to this email immediately.`
+        );
+        
+        makeReport(JSON.stringify({
+            embeds: [{
+                type: 'rich',
+                title: '✏️ Self Username Changed',
+                description: `User changed their username`,
+                color: 0x00AAFF,
+                fields: [
+                    {
+                        name: 'Old Username',
+                        value: oldUsername,
+                        inline: true
+                    },
+                    {
+                        name: 'New Username',
+                        value: newUsername,
+                        inline: true
+                    }
+                ]
+            }]
+        }));
+        
+        res.json({ message: 'Username changed successfully!', redirect: '/settings' });
+    } catch (e) {
+        console.error('Error changing username:', e);
+        res.json({ error: 'Server error' });
+    }
+});
+
 
 // Delete All User's Miis (User - own miis only)
 site.post('/deleteAllMyMiis', requireAuth, async (req, res) => {
@@ -4702,6 +4992,14 @@ site.post('/signup', async (req, res) => {
         res.json({ error: "Username already taken" });
         return;
     }
+    
+    // Check if username is reserved
+    const reserved = await ReservedUsername.findOne({ username: req.body.username });
+    if (reserved) {
+        res.json({ error: "This username is temporarily unavailable. Please try again later or choose a different username." });
+        return;
+    }
+    
     if (isBad(req.body.username) || existingUsername || !validate(req.body.username)) {
         res.json({ error: "Username invalid" });
         return;
@@ -4755,13 +5053,13 @@ site.post('/login', async (req, res) => {
             const token = createToken(user);
             
             res.cookie('token', token, {
-                maxAge: 30 * 24 * 60 * 60 * 1000, // 1 Month
+                maxAge: ms("30 days"), // 1 Month
                 httpOnly: true, // Prevent XSS leaking - TODO: changing username should require password because it should return a JWT with a version increase
                 secure: process.env.NODE_ENV === 'production', // HTTPS only in production
                 sameSite: 'lax' // CSRF protection
             });
             res.cookie('username', req.body.username, { 
-                maxAge: 30 * 24 * 60 * 60 * 1000 
+                maxAge: ms("30 days") 
             });
         }
         else {
@@ -4807,23 +5105,16 @@ setInterval(async () => {
     if (curTime.getHours() === 22 && settings.highlightedMiiChangeDay !== curTime.getDay()) {
         makeReport("**Don't forget to set a new Highlighted Mii!**");
     }
-}, 1000 * 60 * 60);
+}, ms("1h"));
 
 // TODO: reset password functionality which should increase token version
 
-// TODO: "Check your email to verify your account!" should be feedback on the site, not a new page
+// TODO: vulnerability where if username and email are changed, and someone else signs up with the old email and old username, the first user can access their account
+// To fix this, simply create a reserveUsername field in mongo, that lasts as long as the JWTs do to make sure they are defintiely expired. 
+// If trying to move to or create a user with the name of a reserved username, return the standard json error to be shown on the page like usual.
+// Also at the same time, prevent users from changing their name more than once a month. Make sure this is known on the settings page.
 
-// TODO: verify pass and salt are strings of len>1
-
-// TOOD: /logout should not give no auth errors
-
-// TODO: middlewhare should serve json responses...
-
-// TODO: username changes need to change mii's uploader field. 
-
-///// Utils:
-// - Look for opening <% without closing one
-// <%(?![\s\S]*%>)
+// Remove most try-catches to let 500 handler take it
 
 ///// Utils:
 // - Look for opening <% without closing one

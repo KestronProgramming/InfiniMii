@@ -57,6 +57,9 @@ const userSchema = new mongoose.Schema({
     banExpires: Number,
     banReason: String,
     tokenVersion: { type: Number, default: 0 }, // Don't accept JWTs older than this
+    lastUsernameChange: { type: Number, default: 0 }, // Track when username was last changed
+    resetPasswordToken: String, // Token for password reset
+    resetPasswordExpires: Number, // Expiration time for reset token
 }, { timestamps: true, minimize: false });
 
 const settingsSchema = new mongoose.Schema({
@@ -67,10 +70,18 @@ const settingsSchema = new mongoose.Schema({
     officialCategories: { type: mongoose.Schema.Types.Mixed, default: { categories: [] } }
 }, { _id: false, minimize: false });
 
+// Reserved usernames schema to prevent impersonating a user right after they change their username
+// Also prevents a unlikely vulnerability where JWTs exist for an email+username and the user changes both, and somehow another user signs up with the same email and username
+const reservedUsernameSchema = new mongoose.Schema({
+    username: { type: String, required: true, unique: true, index: true },
+    expiresAt: { type: Date, required: true, index: { expires: 0 } } // auto-deletes when expired
+});
+
 // --- Models --- //
-const Mii = mongoose.model("Mii", miiSchema);
-const User = mongoose.model("User", userSchema);
+const Miis = mongoose.model("Mii", miiSchema);
+const Users = mongoose.model("User", userSchema);
 const Settings = mongoose.model("Settings", settingsSchema);
+const ReservedUsername = mongoose.model("ReservedUsername", reservedUsernameSchema);
 
 // --- Connection --- //
 const connectionPromise = mongoose.connect("mongodb://localhost:27017/infinimii", {
@@ -86,14 +97,17 @@ async function clearIndexes() {
         console.log('Connected to MongoDB. Dropping indexes...');
 
         // Drop indexes on each collection (keeps _id index)
-        await Mii.collection.dropIndexes();
+        await Miis.collection.dropIndexes();
         console.log('Dropped indexes on Miis collection.');
 
-        await User.collection.dropIndexes();
+        await Users.collection.dropIndexes();
         console.log('Dropped indexes on Users collection.');
 
         await Settings.collection.dropIndexes();
         console.log('Dropped indexes on Settings collection.');
+        
+        await ReservedUsername.collection.dropIndexes();
+        console.log('Dropped indexes on ReservedUsernames collection.');
 
         console.log('All indexes cleared. Exiting...');
         // process.exit(0);
@@ -106,7 +120,8 @@ async function clearIndexes() {
 
 export {
     connectionPromise,
-    Mii,
-    User,
-    Settings
+    Miis,
+    Users,
+    Settings,
+    ReservedUsername
 };

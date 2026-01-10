@@ -12,6 +12,8 @@
 		<div class="content">
 			<%- include('sidebar') %>
 			<div class="settings-container">
+				<div id="settings-message" class="form-message" style="display: none; margin-bottom: 20px;"></div>
+				
 				<fieldset>
 					<legend>Profile Settings</legend>
 					
@@ -25,7 +27,9 @@
 					<!-- Change Username -->
 					<div class="setting-group">
 						<label>Username</label>
+						<p style="color: var(--text-2); font-size: 0.9em; margin: 5px 0;">ℹ️ You can only change your username once per month.</p>
 						<input type="text" placeholder="New Username" id="nUser">
+						<input type="password" placeholder="Current Password" id="userChangePassword">
 						<button onclick="changeUser()">Change Username</button>
 					</div>
 				</fieldset>
@@ -75,6 +79,14 @@
 		<%- include('footer') %>
 		<script src="/global.js"></script>
 		<script>
+			function showMessage(text, type = 'error') {
+				const messageDiv = document.getElementById('settings-message');
+				messageDiv.textContent = text;
+				messageDiv.className = `form-message ${type}`;
+				messageDiv.style.display = 'block';
+				messageDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+			}
+			
 			async function changePfp() {
 				const pfpId = document.getElementById('pfpId').value;
 				if (!pfpId) {
@@ -104,33 +116,40 @@
 			}
 
 			async function changeUser() {
-				const newUser = document.getElementById('nUser').value;
-				if (!newUser) {
-					alert('Please enter a new username');
+				const newUsername = document.getElementById('nUser').value;
+				const password = document.getElementById('userChangePassword').value;
+				const messageDiv = document.getElementById('settings-message');
+				
+				if (!newUsername || !password) {
+					showMessage('Please enter both a new username and your password', 'error');
 					return;
 				}
 
-				const confirmed = confirm(`Are you sure you want to change your username to "${newUser}"?`);
+				const confirmed = confirm(`Are you sure you want to change your username to "${newUsername}"?\nYou won't be able to change it again for 30 days.`);
 				if (!confirmed) return;
 
 				try {
-					const response = await fetch(`/changeUser`, {
-						method: "POST",
-						body: JSON.stringify({ newUser: encodeURIComponent(newUser) }),
-						headers: { "Content-Type": "application/json" },
+					const response = await fetch('/changeSelfUsername', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({ newUsername, password })
 					});
 					const result = await response.json();
 					
 					if (!result.error) {
-						alert('Username changed successfully! Please log in again.');
-						window.location.href = '/login';
-					}
-                    else {
-						alert(result.error || 'Error changing username');
+						showMessage(result.message || 'Username changed successfully!', 'success');
+						document.getElementById('nUser').value = '';
+						document.getElementById('userChangePassword').value = '';
+						setTimeout(() => {
+							if (result.redirect) window.location.href = result.redirect;
+							else location.reload();
+						}, 2000);
+					} else {
+						showMessage(result.error, 'error');
 					}
 				} catch (error) {
 					console.error('Error:', error);
-					alert('Failed to change username');
+					showMessage('Failed to change username', 'error');
 				}
 			}
 
