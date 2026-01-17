@@ -1,3 +1,5 @@
+import "./setEnvs.js";
+console.log("test")
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 const __filename = fileURLToPath(import.meta.url);
@@ -23,7 +25,6 @@ import { STATUS_CODES } from 'http';
 import { rateLimit } from 'express-rate-limit'
 import ms from 'ms'
 
-process.env = JSON.parse(fs.readFileSync("./env.json", "utf-8"));
 import { connectionPromise, Miis, Users, Settings, ReservedUsername } from "./database.js";
 
 const defaultMiisPerPage = 15;

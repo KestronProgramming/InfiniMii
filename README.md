@@ -19,35 +19,18 @@ cd InfiniMii
 npm i
 ```
 ## Make env.json
+Copy `example.env.json` to `env.json` and fill out each of the required fields with your variables.
+
 The email instructions and code are designed for use with Zoho Mail, and mileage may vary for other email providers.
+
+
+## Setup Storage
+You will need ot setup a MongoDB server on localhost on the default port (later we will support any URL). 
+
+A default Mii ID and such will need to be set. You can use MiiJS to get the necessary JSON if the site won't initialize without one. Paste the JSON into the miis array, and add the following fields to it.
 ```json
 {
-    "email":"EMAIL THE SITE WILL LOG INTO",
-    "emailPass":"PASSWORD TO THAT EMAIL",
-    "salt":"ANY PHRASE YOU LIKE",
-    "hookUrl":"DISCORD WEBHOOK FOR POSTING MODDABLE ACTIONS TO",
-    "privateMiiLimit":50,
-    "baseUrl":"THE URL YOUR SITE IS HOSTED FROM",
-    "discordInvite":"AN INVITE TO YOUR DISCORD SUPPORT SERVER",
-    "githubLink":"https://github.com/Stewared/InfiniMii"
-}
-```
-## Make storage.json
-```json
-{
-    "miis":[],
-    "users":[],
-    "highlightedMii":"",
-    "highlightedMiiChangeDay":0,
-    "bannedIPs":[],
-    "privateMiis":{},
-    "officialCategories":{}
-}
-```
-Some fields will need to be manually edited once more data is made. A default Mii ID and such will need to be set. You can use MiiJS to get the necessary JSON if the site won't initialize without one. Paste the JSON into the miis array, and add the following fields to it. Add the ID you select (five characters) to (storage.json).highlightedMii
-```json
-{
-    "id":"14849",
+    "id":"default",
     "uploader":"USERNAME",
     "desc":"DESCRIPTION",
     "votes":1,
@@ -56,7 +39,8 @@ Some fields will need to be manually edited once more data is made. A default Mi
     "console":"3DS"
 }
 ```
-Once you sign up for the website, find yourself in the `users` array, and add the 'moderator' and 'administrator' roles to the array.
+
+Once you sign up for the website, find yourself in the `users` model storage, and add the 'administrator' role to your roles array.
 
 ## Running
 ```bash
