@@ -34,16 +34,16 @@
                     <p class="lead">
                         <div id="convInput">
                             <!--Mii Height/Weight-->
-                            <label for="miiHeight" class="miiHeightConvIn">Mii Height</label> <input type="range" min="0" max="127" value="64" class="miiHeightConvIn" name="miiHeight"> <input disabled value="64" class="miiHeightConvIn" style="width:2rem;"><br>
-                            <label for="miiWeight" class="miiWeightConvIn">Mii Weight</label> <input type="range" min="0" max="127" value="64" class="miiWeightConvIn" name="miiWeight"> <input disabled value="64" class="miiWeightConvIn" style="width:2rem;"><br>
+                            <label for="miiHeight" class="miiHeightConvIn">Mii Height</label> <input type="range" min="0" max="127" value="64" class="miiHeight" name="miiHeight"> <input disabled value="64" class="miiHeightConvIn" style="width:2rem;"><br>
+                            <label for="miiWeight" class="miiWeightConvIn">Mii Weight</label> <input type="range" min="0" max="127" value="64" class="miiWeight" name="miiWeight"> <input disabled value="64" class="miiWeightConvIn" style="width:2rem;"><br>
 
                             <!--Feet/Inches, Centimeters-->
-                            <label for="feetConvIn" class="lenConvIn">Feet</label> <input name="feetConvIn" type="number" min="0" max="7" class="lenConvIn" value="5" style="width:2rem;"> <label for="inchConvIn" class="lenConvIn">Inches</label> <input name="inchConvIn" type="number" min="0" max="84" class="lenConvIn" value="0" style="width:2rem;"><br>
-                            <label for="centiConvIn" class="lenConvIn">Centimeters</label> <input name="centiConvIn" type="number" min="0" max="213.36" class="lenConvIn" value="152.4" style="width:5.5rem;"><br>
+                            <label for="feetConvIn" class="lenConvIn">Feet</label> <input name="feet" type="number" min="0" max="7" class="lenConvIn" value="5" style="width:2rem;"> <label for="inchConvIn" class="lenConvIn">Inches</label> <input name="inchConvIn" type="number" min="0" max="84" class="lenConvIn" value="0" style="width:2rem;"><br>
+                            <label for="centiConvIn" class="lenConvIn">Centimeters</label> <input name="centi" type="number" min="0" max="213.36" class="lenConvIn" value="152.4" style="width:5.5rem;"><br>
 
                             <!--Pounds, Kilograms-->
-                            <label for="poundsConvIn" class="weightConvIn">Pounds</label> <input name="weightConvIn" type="number" min="0" max="351.29" style="width:5.5rem;" value="113.37"><br>
-                            <label for="kilosConvIn" class="weightConvIn">Kilograms</label> <input name="weightConvIn" type="number" min="0" max="159" style="width:3rem;" value="51">
+                            <label for="poundsConvIn" class="weightConvIn">Pounds</label> <input name="weight" type="number" min="0" max="351.29" style="width:5.5rem;" value="113.37"><br>
+                            <label for="kilosConvIn" class="weightConvIn">Kilograms</label> <input name="weight" type="number" min="0" max="159" style="width:3rem;" value="51">
                         </div>
                     </p>
                 </article>
@@ -83,6 +83,57 @@
                     "kilos"
                 ]
             };
+            function updateCalcs(el){
+                switch(el.name){
+                    case "miiHeight":
+                        let height=miiHeightToMeasurements(el.value);
+                        if(document.getElementById("inches")>12){
+                            document.getElementById("feet").value=0;
+                            document.getElementById("inches").value=height.totalInches;
+                        }
+                        else{
+                            document.getElementById("feet").value=height.feet;
+                            document.getElementById("inches").value=height.inches;
+                        }
+                        document.getElementById("centi").value=height.centimeters;
+                    break;
+                    case "miiWeight":
+                        let weight=miiWeightToRealWeight(document.getElementById("height").value,el.value);
+                        document.getElementById("pounds").value=weight.pounds;
+                        document.getElementById("kilos").value=weight.kilograms;
+                    break;
+                    case "feet":
+                        document.getElementById("miiHeight").value=inchesToMiiHeight(el.value*12+document.getElementById("inches").value);
+                        document.getElementById("centi").value=(el.value*12+document.getElementById("inches").value)*2.54;
+                    break;
+                    case "inches":
+                        if(el.value>12){
+                            document.getElementById("feet").value=0;
+                        }
+                        document.getElementById("miiHeight").value=inchesToMiiHeight(document.getElementById("feet").value*12+el.value);
+                        document.getElementById("centi").value=(document.getElementById("feet").value*12+el.value)*2.54;
+                    break;
+                    case "centi":
+                        if(document.getElementById("inches").value>12){
+                            document.getElementById("feet").value=0;
+                            document.getElementById("inches").value=el.value/2.54;
+                        }
+                        else{
+                            document.getElementById("feet").value=Math.floor((el.value/2.54)/12);
+                            document.getElementById("inches").value=(el.value/2.54)%12;
+                        }
+                        document.getElementById("miiHeight").value=centimetersToMiiHeight(el.value);
+                    break;
+                    case "pounds":
+                        document.getElementById("miiWeight").value=imperialHeightWeightToMiiWeight(document.getElementById("feet").value*12+document.getElementById("inches").value,el.value);
+                        document.getElementById("kilos")=el.value*0.4535924;
+                    break;
+                    case "kilos":
+                        document.getElementById("miiWeight").value=metricHeightWeightToMiiWeight(document.getElementById("centi").value,el.value);
+                        document.getElementById("pounds").value=el.value/0.4535924;
+                    break;
+                }
+            }
         </script>
     </body>
 </html>
