@@ -60,6 +60,9 @@ const userSchema = new mongoose.Schema({
     lastUsernameChange: { type: Number, default: 0 }, // Track when username was last changed
     resetPasswordToken: String, // Token for password reset
     resetPasswordExpires: Number, // Expiration time for reset token
+    pendingEmail: String, // New email waiting to be verified
+    pendingEmailToken: String, // Token for pending email verification
+    pendingEmailExpires: Number, // Expiration time for pending email token
 }, { timestamps: true, minimize: false });
 
 const settingsSchema = new mongoose.Schema({

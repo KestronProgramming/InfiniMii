@@ -32,55 +32,57 @@
                 <article>
                     <h2>Convert from Mii Height to Feet & Inches/Centimeters</h2>
                     <p class="lead">
-                        <input type="range">
-                        <input placeholder="Mii Height"><br>
-                        <br>
-                        <input placeholder="Feet">
-                        <input placeholder="Inches">
-                        <input placeholder="Centimeters">
-                    </p>
-                </article>
-                <article>
-                    <h2>Convert from Feet & Inches/Centimeters to Mii Height</h2>
-                    <p class="lead">
-                        <input placeholder="Feet">
-                        <input placeholder="Inches">
-                        <input placeholder="Centimeters"><br>
-                        <br>
-                        <input type="range">
-                        <input placeholder="Mii Height">
-                    </p>
-                </article>
-                <article>
-                    <h2>Convert from Mii Height/Weight to Pounds/Kilograms</h2>
-                    <p class="lead">
-                        <input placeholder="Mii Height">
-                        <input type="range">
-                        <input placeholder="Mii Weight">
-                        <input type="range"><br>
-                        <br>
-                        <input placeholder="Pounds">
-                        <input placeholder="Kilograms">
-                    </p>
-                </article>
-                <article>
-                    <h2>Convert from Pounds/Kilograms to Mii Height/Weight</h2>
-                    <p class="lead">
-                        <input placeholder="Pounds">
-                        <input placeholder="Kilograms"><br>
-                        <br>
-                        <input placeholder="Mii Height">
-                        <input type="range">
-                        <input placeholder="Mii Weight">
-                        <input type="range">
+                        <div id="convInput">
+                            <!--Mii Height/Weight-->
+                            <label for="miiHeight" class="miiHeightConvIn">Mii Height</label> <input type="range" min="0" max="127" value="64" class="miiHeightConvIn" name="miiHeight"> <input disabled value="64" class="miiHeightConvIn" style="width:2rem;"><br>
+                            <label for="miiWeight" class="miiWeightConvIn">Mii Weight</label> <input type="range" min="0" max="127" value="64" class="miiWeightConvIn" name="miiWeight"> <input disabled value="64" class="miiWeightConvIn" style="width:2rem;"><br>
+
+                            <!--Feet/Inches, Centimeters-->
+                            <label for="feetConvIn" class="lenConvIn">Feet</label> <input name="feetConvIn" type="number" min="0" max="7" class="lenConvIn" value="5" style="width:2rem;"> <label for="inchConvIn" class="lenConvIn">Inches</label> <input name="inchConvIn" type="number" min="0" max="84" class="lenConvIn" value="0" style="width:2rem;"><br>
+                            <label for="centiConvIn" class="lenConvIn">Centimeters</label> <input name="centiConvIn" type="number" min="0" max="213.36" class="lenConvIn" value="152.4" style="width:5.5rem;"><br>
+
+                            <!--Pounds, Kilograms-->
+                            <label for="poundsConvIn" class="weightConvIn">Pounds</label> <input name="weightConvIn" type="number" min="0" max="351.29" style="width:5.5rem;" value="113.37"><br>
+                            <label for="kilosConvIn" class="weightConvIn">Kilograms</label> <input name="weightConvIn" type="number" min="0" max="159" style="width:3rem;" value="51">
+                        </div>
                     </p>
                 </article>
             </article>
-            
             <%- include('featuredMiis') %>
         </main>
         
         <%- include('footer') %>
         <script src="/global.js" defer></script>
+        <script src="/miijsFrontendPort.js"></script>
+        <script>
+            const selectFrom=document.getElementById("selectFrom");
+            const selectTo=document.getElementById("selectTo");
+            var fromMappings={
+                "miiHeight":[
+                    "centi",
+                    "inches"
+                ],
+                "centi":[
+                    "miiHeight",
+                    "inches"
+                ],
+                "inches":[
+                    "miiHeight",
+                    "centi"
+                ],
+                "miiWeight":[
+                    "pounds",
+                    "kilos"
+                ],
+                "pounds":[
+                    "miiWeight",
+                    "kilos"
+                ],
+                "kilos":[
+                    "miiWeight",
+                    "kilos"
+                ]
+            };
+        </script>
     </body>
 </html>

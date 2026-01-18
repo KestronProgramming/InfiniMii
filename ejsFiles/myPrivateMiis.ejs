@@ -17,6 +17,7 @@
         <%- include('globalStyle') %>
         <%- include('header') %>
         <%- include('accountDisplay') %>
+        <script src="/global.js"></script>
         <main class='content' role="main">
             <%- include('sidebar') %>
             <div class='private-miis-container'>
@@ -81,55 +82,50 @@
         
         <script>
             async function publishMii(miiId) {
-                if (!confirm('Are you sure you want to publish this Mii? It will be visible to everyone.')) {
-                    return;
-                }
-                
-                try {
-                    const response = await fetch('/publishMii', {
-                        method: 'POST',
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ miiId })
-                    });
-                    
-                    const data = await response.json();
-                    
-                    if (!data.error) {
-                        alert('Mii published successfully!');
-                        location.reload();
-                    } else {
-                        alert('Error: ' + (data.error || 'Failed to publish Mii'));
+                showConfirm('Are you sure you want to publish this Mii? It will be visible to everyone.', async () => {
+                    try {
+                        const response = await fetch('/publishMii', {
+                            method: 'POST',
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ miiId })
+                        });
+                        
+                        const data = await response.json();
+                        
+                        if (!data.error) {
+                            showAlert('Mii published successfully!', 3000, { title: 'Success', type: 'success' });
+                            setTimeout(() => location.reload(), 3000);
+                        } else {
+                            showAlert('Error: ' + (data.error || 'Failed to publish Mii'), 5000, { title: 'Error', type: 'error' });
+                        }
+                    } catch (error) {
+                        console.error('Error:', error);
+                        showAlert('Error publishing Mii', 5000, { title: 'Error', type: 'error' });
                     }
-                } catch (error) {
-                    console.error('Error:', error);
-                    alert('Error publishing Mii');
-                }
+                }, null, { title: 'Publish Mii', confirmText: 'Publish' });
             }
             
             async function deleteMii(miiId) {
-                // TODO_LOW: replace with modal
-                if (!confirm('Are you sure you want to delete this Mii? This cannot be undone.')) {
-                    return;
-                }
-                
-                try {
-                    const response = await fetch('/deleteMii', {
-                        body: JSON.stringify({ miiId }),
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                    });
-                    const data = await response.text();
-                    
-                    if (data.includes('true')) {
-                        alert('Mii deleted successfully');
-                        location.reload();
-                    } else {
-                        alert('Error deleting Mii');
+                showConfirm('Are you sure you want to delete this Mii? This cannot be undone.', async () => {
+                    try {
+                        const response = await fetch('/deleteMii', {
+                            body: JSON.stringify({ miiId }),
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                        });
+                        const data = await response.text();
+                        
+                        if (data.includes('true')) {
+                            showAlert('Mii deleted successfully', 3000, { title: 'Success', type: 'success' });
+                            setTimeout(() => location.reload(), 3000);
+                        } else {
+                            showAlert('Error deleting Mii', 5000, { title: 'Error', type: 'error' });
+                        }
+                    } catch (error) {
+                        console.error('Error:', error);
+                        showAlert('Error deleting Mii', 5000, { title: 'Error', type: 'error' });
                     }
-                } catch (error) {
-                    console.error('Error:', error);
-                    alert('Error deleting Mii');
-                }
+                }, null, { title: 'Delete Mii', confirmText: 'Delete' });
             }
         </script>
     </body>

@@ -5,7 +5,7 @@ async function addParentCategory() {
     const color = document.getElementById('newParentColor').value;
     
     if (!name) {
-        alert('Please enter a category name');
+        showAlert('Please enter a category name', 5000, { title: 'Error', type: 'error' });
         return;
     }
     
@@ -19,14 +19,14 @@ async function addParentCategory() {
         const data = await response.json();
         
         if (!data.error) {
-            alert('Parent category created successfully!');
-            location.reload();
+            showAlert('Parent category created successfully!', 3000, { title: 'Success', type: 'success' });
+            setTimeout(() => location.reload(), 3000);
         } else {
-            alert('Error: ' + (data.error || 'Failed to create category'));
+            showAlert('Error: ' + (data.error || 'Failed to create category'), 5000, { title: 'Error', type: 'error' });
         }
     } catch (error) {
         console.error('Error:', error);
-        alert('Error creating category');
+        showAlert('Error creating category', 5000, { title: 'Error', type: 'error' });
     }
 }
 
@@ -35,7 +35,7 @@ async function addSubcategory(parentCategory) {
     const subcategoryName = document.getElementById(inputId).value.trim();
     
     if (!subcategoryName) {
-        alert('Please enter a subcategory name');
+        showAlert('Please enter a subcategory name', 5000, { title: 'Error', type: 'error' });
         return;
     }
     
@@ -49,14 +49,14 @@ async function addSubcategory(parentCategory) {
         const data = await response.json();
         
         if (!data.error) {
-            alert('Subcategory created successfully!');
-            location.reload();
+            showAlert('Subcategory created successfully!', 3000, { title: 'Success', type: 'success' });
+            setTimeout(() => location.reload(), 3000);
         } else {
-            alert('Error: ' + (data.error || 'Failed to create subcategory'));
+            showAlert('Error: ' + (data.error || 'Failed to create subcategory'), 5000, { title: 'Error', type: 'error' });
         }
     } catch (error) {
         console.error('Error:', error);
-        alert('Error creating subcategory');
+        showAlert('Error creating subcategory', 5000, { title: 'Error', type: 'error' });
     }
 }
 
@@ -75,14 +75,14 @@ async function renameParentCategory(oldName) {
         const data = await response.json();
         
         if (!data.error) {
-            alert('Category renamed successfully!');
-            location.reload();
+            showAlert('Category renamed successfully!', 3000, { title: 'Success', type: 'success' });
+            setTimeout(() => location.reload(), 3000);
         } else {
-            alert('Error: ' + (data.error || 'Failed to rename category'));
+            showAlert('Error: ' + (data.error || 'Failed to rename category'), 5000, { title: 'Error', type: 'error' });
         }
     } catch (error) {
         console.error('Error:', error);
-        alert('Error renaming category');
+        showAlert('Error renaming category', 5000, { title: 'Error', type: 'error' });
     }
 }
 
@@ -91,91 +91,95 @@ async function renameSubcategory(parentCategory, oldName) {
     
     if (!newName || newName === oldName) return;
     
-    const confirmed = confirm(
-        `This will rename "${oldName}" to "${newName}" and update all Miis using this category.\n\nContinue?`
+    showConfirm(
+        `This will rename "${oldName}" to "${newName}" and update all Miis using this category.\n\nContinue?`,
+        async () => {
+            try {
+                const response = await fetch('/renameSubcategory', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ parentCategory, oldName, newName })
+                });
+                
+                const data = await response.json();
+                
+                if (!data.error) {
+                    showAlert(`Subcategory renamed successfully!\n${data.updatedMiis} Miis were updated.`, 4000, { title: 'Success', type: 'success' });
+                    setTimeout(() => location.reload(), 4000);
+                } else {
+                    showAlert('Error: ' + (data.error || 'Failed to rename subcategory'), 5000, { title: 'Error', type: 'error' });
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                showAlert('Error renaming subcategory', 5000, { title: 'Error', type: 'error' });
+            }
+        },
+        null,
+        { title: 'Confirm Rename' }
     );
-    
-    if (!confirmed) return;
-    
-    try {
-        const response = await fetch('/renameSubcategory', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ parentCategory, oldName, newName })
-        });
-        
-        const data = await response.json();
-        
-        if (!data.error) {
-            alert(`Subcategory renamed successfully!\n${data.updatedMiis} Miis were updated.`);
-            location.reload();
-        } else {
-            alert('Error: ' + (data.error || 'Failed to rename subcategory'));
-        }
-    } catch (error) {
-        console.error('Error:', error);
-        alert('Error renaming subcategory');
-    }
 }
 
 async function deleteSubcategory(parentCategory, subcategoryName) {
-    const confirmed = confirm(
-        `Delete subcategory "${subcategoryName}"?\n\nThis will remove it from all Miis using it. This cannot be undone.`
+    showConfirm(
+        `Delete subcategory "${subcategoryName}"?\n\nThis will remove it from all Miis using it. This cannot be undone.`,
+        async () => {
+            try {
+                const response = await fetch('/deleteSubcategory', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ parentCategory, subcategoryName })
+                });
+                
+                const data = await response.json();
+                
+                if (!data.error) {
+                    showAlert(`Subcategory deleted successfully!\n${data.updatedMiis} Miis were updated.`, 4000, { title: 'Success', type: 'success' });
+                    setTimeout(() => location.reload(), 4000);
+                } else {
+                    showAlert('Error: ' + (data.error || 'Failed to delete subcategory'), 5000, { title: 'Error', type: 'error' });
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                showAlert('Error deleting subcategory', 5000, { title: 'Error', type: 'error' });
+            }
+        },
+        null,
+        { title: 'Confirm Delete', confirmText: 'Delete' }
     );
-    
-    if (!confirmed) return;
-    
-    try {
-        const response = await fetch('/deleteSubcategory', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ parentCategory, subcategoryName })
-        });
-        
-        const data = await response.json();
-        
-        if (!data.error) {
-            alert(`Subcategory deleted successfully!\n${data.updatedMiis} Miis were updated.`);
-            location.reload();
-        } else {
-            alert('Error: ' + (data.error || 'Failed to delete subcategory'));
-        }
-    } catch (error) {
-        console.error('Error:', error);
-        alert('Error deleting subcategory');
-    }
 }
 
 async function deleteParentCategory(name) {
-    const confirmed = confirm(
-        `Delete parent category "${name}" and ALL its subcategories?\n\nThis will remove all subcategories from all Miis. This cannot be undone.`
+    showConfirm(
+        `Delete parent category "${name}" and ALL its subcategories?\n\nThis will remove all subcategories from all Miis. This cannot be undone.`,
+        () => {
+            showConfirm(
+                `Are you ABSOLUTELY sure? This is a destructive action.`,
+                async () => {
+                    try {
+                        const response = await fetch('/deleteParentCategory', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ name })
+                        });
+                        
+                        const data = await response.json();
+                        
+                        if (!data.error) {
+                            showAlert(`Parent category deleted successfully!\n${data.updatedMiis} Miis were updated.`, 4000, { title: 'Success', type: 'success' });
+                            setTimeout(() => location.reload(), 4000);
+                        } else {
+                            showAlert('Error: ' + (data.error || 'Failed to delete category'), 5000, { title: 'Error', type: 'error' });
+                        }
+                    } catch (error) {
+                        console.error('Error:', error);
+                        showAlert('Error deleting category', 5000, { title: 'Error', type: 'error' });
+                    }
+                },
+                null,
+                { title: '⚠️ Final Warning', confirmText: 'Yes, Delete Everything' }
+            );
+        },
+        null,
+        { title: 'Confirm Delete', confirmText: 'Continue' }
     );
-    
-    if (!confirmed) return;
-    
-    const doubleConfirmed = confirm(
-        `Are you ABSOLUTELY sure? This is a destructive action.`
-    );
-    
-    if (!doubleConfirmed) return;
-    
-    try {
-        const response = await fetch('/deleteParentCategory', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name })
-        });
-        
-        const data = await response.json();
-        
-        if (!data.error) {
-            alert(`Parent category deleted successfully!\n${data.updatedMiis} Miis were updated.`);
-            location.reload();
-        } else {
-            alert('Error: ' + (data.error || 'Failed to delete category'));
-        }
-    } catch (error) {
-        console.error('Error:', error);
-        alert('Error deleting category');
-    }
 }

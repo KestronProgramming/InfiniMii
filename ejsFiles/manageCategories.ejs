@@ -162,7 +162,7 @@
                 const color = document.getElementById('newRootColor').value;
                 
                 if (!name) {
-                    alert('Please enter a category name');
+                    showAlert('Please enter a category name', 5000, { title: 'Error', type: 'error' });
                     return;
                 }
                 
@@ -176,15 +176,15 @@
                     const data = await response.json();
                     
                     if (!data.error) {
-                        alert('Root category created successfully!');
+                        showAlert('Root category created successfully!', 3000, { title: 'Success', type: 'success' });
                         document.getElementById('newRootName').value = '';
-                        await loadCategories();
+                        setTimeout(() => loadCategories(), 3000);
                     } else {
-                        alert('Error: ' + (data.error || 'Failed to create category'));
+                        showAlert('Error: ' + (data.error || 'Failed to create category'), 5000, { title: 'Error', type: 'error' });
                     }
                 } catch (error) {
                     console.error('Error:', error);
-                    alert('Error creating category');
+                    showAlert('Error creating category', 5000, { title: 'Error', type: 'error' });
                 }
             }
 
@@ -209,15 +209,15 @@
                     const data = await response.json();
                     
                     if (!data.error) {
-                        alert('Child category created successfully!');
+                        showAlert('Child category created successfully!', 3000, { title: 'Success', type: 'success' });
                         expandedNodes.add(parentPath); // Auto-expand parent
-                        await loadCategories();
+                        setTimeout(() => loadCategories(), 3000);
                     } else {
-                        alert('Error: ' + (data.error || 'Failed to create category'));
+                        showAlert('Error: ' + (data.error || 'Failed to create category'), 5000, { title: 'Error', type: 'error' });
                     }
                 } catch (error) {
                     console.error('Error:', error);
-                    alert('Error creating category');
+                    showAlert('Error creating category', 5000, { title: 'Error', type: 'error' });
                 }
             }
 
@@ -229,32 +229,33 @@
                 
                 if (!newName || newName.trim() === category.name) return;
                 
-                const confirmed = confirm(
+                showConfirm(
                     `Rename "${category.name}" to "${newName.trim()}"?\n\n` +
-                    `This will update all Miis using this category and any of its descendants.`
+                    `This will update all Miis using this category and any of its descendants.`,
+                    async () => {
+                        try {
+                            const response = await fetch('/renameCategory', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ path, newName: newName.trim() })
+                            });
+                            
+                            const data = await response.json();
+                            
+                            if (!data.error) {
+                                showAlert(`Category renamed successfully!\n${data.updatedMiis} Miis were updated.`, 4000, { title: 'Success', type: 'success' });
+                                setTimeout(() => loadCategories(), 4000);
+                            } else {
+                                showAlert('Error: ' + (data.error || 'Failed to rename category'), 5000, { title: 'Error', type: 'error' });
+                            }
+                        } catch (error) {
+                            console.error('Error:', error);
+                            showAlert('Error renaming category', 5000, { title: 'Error', type: 'error' });
+                        }
+                    },
+                    null,
+                    { title: 'Rename Category', confirmText: 'Rename' }
                 );
-                
-                if (!confirmed) return;
-                
-                try {
-                    const response = await fetch('/renameCategory', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ path, newName: newName.trim() })
-                    });
-                    
-                    const data = await response.json();
-                    
-                    if (!data.error) {
-                        alert(`Category renamed successfully!\n${data.updatedMiis} Miis were updated.`);
-                        await loadCategories();
-                    } else {
-                        alert('Error: ' + (data.error || 'Failed to rename category'));
-                    }
-                } catch (error) {
-                    console.error('Error:', error);
-                    alert('Error renaming category');
-                }
             }
 
             async function moveCategory(categoryPath) {
@@ -288,39 +289,40 @@
                 
                 const selectionNum = parseInt(selection);
                 if (isNaN(selectionNum) || selectionNum < 0 || selectionNum > possibleParents.length) {
-                    alert('Invalid selection');
+                    showAlert('Invalid selection', 5000, { title: 'Error', type: 'error' });
                     return;
                 }
                 
                 const newParentPath = selectionNum === 0 ? null : possibleParents[selectionNum - 1].path;
                 
-                const confirmed = confirm(
+                showConfirm(
                     `Move "${category.name}" to ${newParentPath || 'Root'}?\n\n` +
-                    `This will update all Miis using this category and its descendants.`
+                    `This will update all Miis using this category and its descendants.`,
+                    async () => {
+                        try {
+                            const response = await fetch('/moveCategory', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ categoryPath, newParentPath })
+                            });
+                            
+                            const data = await response.json();
+                            
+                            if (!data.error) {
+                                showAlert(`Category moved successfully!\n${data.updatedMiis} Miis were updated.`, 4000, { title: 'Success', type: 'success' });
+                                if (newParentPath) expandedNodes.add(newParentPath);
+                                setTimeout(() => loadCategories(), 4000);
+                            } else {
+                                showAlert('Error: ' + (data.error || 'Failed to move category'), 5000, { title: 'Error', type: 'error' });
+                            }
+                        } catch (error) {
+                            console.error('Error:', error);
+                            showAlert('Error moving category', 5000, { title: 'Error', type: 'error' });
+                        }
+                    },
+                    null,
+                    { title: 'Move Category', confirmText: 'Move' }
                 );
-                
-                if (!confirmed) return;
-                
-                try {
-                    const response = await fetch('/moveCategory', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ categoryPath, newParentPath })
-                    });
-                    
-                    const data = await response.json();
-                    
-                    if (!data.error) {
-                        alert(`Category moved successfully!\n${data.updatedMiis} Miis were updated.`);
-                        if (newParentPath) expandedNodes.add(newParentPath);
-                        await loadCategories();
-                    } else {
-                        alert('Error: ' + (data.error || 'Failed to move category'));
-                    }
-                } catch (error) {
-                    console.error('Error:', error);
-                    alert('Error moving category');
-                }
             }
 
             async function deleteCategory(path) {
@@ -338,33 +340,53 @@
                       `This will remove it from all Miis.\n\n` +
                       `THIS CANNOT BE UNDONE!`;
                 
-                const confirmed = confirm(message);
-                if (!confirmed) return;
-                
-                if (hasChildren) {
-                    const doubleConfirm = confirm(`Are you ABSOLUTELY sure? This will delete ${childCount + 1} categories total.`);
-                    if (!doubleConfirm) return;
-                }
-                
-                try {
-                    const response = await fetch('/deleteCategory', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ path })
-                    });
-                    
-                    const data = await response.json();
-                    
-                    if (!data.error) {
-                        alert(`Category deleted successfully!\n${data.updatedMiis} Miis were updated.`);
-                        await loadCategories();
+                showConfirm(message, () => {
+                    if (hasChildren) {
+                        showConfirm(`Are you ABSOLUTELY sure? This will delete ${childCount + 1} categories total.`, async () => {
+                            try {
+                                const response = await fetch('/deleteCategory', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ path })
+                                });
+                                
+                                const data = await response.json();
+                                
+                                if (!data.error) {
+                                    showAlert(`Category deleted successfully!\n${data.updatedMiis} Miis were updated.`, 4000, { title: 'Success', type: 'success' });
+                                    setTimeout(() => loadCategories(), 4000);
+                                } else {
+                                    showAlert('Error: ' + (data.error || 'Failed to delete category'), 5000, { title: 'Error', type: 'error' });
+                                }
+                            } catch (error) {
+                                console.error('Error:', error);
+                                showAlert('Error deleting category', 5000, { title: 'Error', type: 'error' });
+                            }
+                        }, null, { title: '⚠️ Final Warning', confirmText: 'Yes, Delete All' });
                     } else {
-                        alert('Error: ' + (data.error || 'Failed to delete category'));
+                        (async () => {
+                            try {
+                                const response = await fetch('/deleteCategory', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ path })
+                                });
+                                
+                                const data = await response.json();
+                                
+                                if (!data.error) {
+                                    showAlert(`Category deleted successfully!\n${data.updatedMiis} Miis were updated.`, 4000, { title: 'Success', type: 'success' });
+                                    setTimeout(() => loadCategories(), 4000);
+                                } else {
+                                    showAlert('Error: ' + (data.error || 'Failed to delete category'), 5000, { title: 'Error', type: 'error' });
+                                }
+                            } catch (error) {
+                                console.error('Error:', error);
+                                showAlert('Error deleting category', 5000, { title: 'Error', type: 'error' });
+                            }
+                        })();
                     }
-                } catch (error) {
-                    console.error('Error:', error);
-                    alert('Error deleting category');
-                }
+                }, null, { title: 'Delete Category', confirmText: 'Delete' });
             }
 
             function findCategoryByPath(path, nodes) {

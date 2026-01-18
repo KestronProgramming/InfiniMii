@@ -57,7 +57,7 @@ const ratelimitOptions = {
                     type: "rich",
                     title: "Ratelimit Triggered",
                     description: 
-                        `Triggered by IP: ${req.ip}\n` +
+                        `Triggered by IP: ${req.ip}\n` + // This is here for better protection, and so we can block people, and check if it's a VPN first.
                         `Endpoint: ${req.originalUrl}\n` +
                         `Method: ${req.method}\n` +
                         `User Agent: ${req.headers['user-agent']}\n` +
@@ -72,18 +72,18 @@ const ratelimitOptions = {
     
 }
 const defaultRatelimiter = rateLimit({
-	windowMs: ms("10s"),
-	limit: 5,
+	windowMs: ms("5s"),
+	limit: 5,//1 req per sec
     ...ratelimitOptions
 })
 const highGeneralRatelimit = rateLimit({ // General pages like root, etc
 	windowMs: ms("10s"),
-	limit: 20,
+	limit: 20,//2 req per sec
     ...ratelimitOptions
 })
-const miiListRatelimiter = rateLimit({ // Limiter just for serach endpoints
-	windowMs: ms("10s"),
-	limit: 3, // 3 pages per every 10 seconds seems fair
+const miiListRatelimiter = rateLimit({ // Limiter just for search endpoints
+	windowMs: ms("15s"),
+	limit: 30,//2 req per sec
     ...ratelimitOptions
 })
 
@@ -1107,7 +1107,7 @@ site.use(express.static(path.join(__dirname + '/static/css')));
 site.use(express.static(path.join(__dirname + '/static/js')));
 site.use(express.static(path.join(__dirname + '/static/assets')));
 site.use(cookieParser());
-site.use('/favicon.ico', express.static('static/favicon.png'));
+site.use('/favicon.ico', express.static('static/favicon.ico'));
 
 
 //#region Middleware
@@ -1747,13 +1747,104 @@ site.get('/verify', async (req, res) => {
             secure: process.env.NODE_ENV === 'production',
             sameSite: 'lax'
         });
-        res.json({ redirect: `/user/${encodeURIComponent(req.query.user)}` }); 
+        res.redirect(`/user/${encodeURIComponent(req.query.user)}`); 
     }
     else {
-        res.json({error: "Bad request"});
-        return;
+        return await sendError(res, req, "Bad request, try again", 400);
     }
 });
+
+site.get('/verifyEmailChange', async (req, res) => {
+    // Endpoint to verify and complete email change
+    const user = await getUserByUsername(req.query.user);
+    if (!user) {
+        return await sendError(res, req, "User not found", 404);
+    }
+    
+    // Check if there's a pending email change
+    if (!user.pendingEmail || !user.pendingEmailToken) {
+        return await sendError(res, req, "No pending email change found", 400);
+    }
+    
+    // Check if token has expired
+    if (user.pendingEmailExpires && Date.now() > user.pendingEmailExpires) {
+        await Users.findOneAndUpdate(
+            { username: req.query.user },
+            { 
+                $unset: { 
+                    pendingEmail: "",
+                    pendingEmailToken: "",
+                    pendingEmailExpires: ""
+                }
+            }
+        );
+        return await sendError(res, req, "Verification link has expired. Please request a new email change.", 400);
+    }
+    
+    // Verify token
+    if (validatePassword(req.query.token, user.salt, user.pendingEmailToken)) {
+        const oldEmail = user.email;
+        
+        // Increment token version to invalidate old JWTs (security - email is in JWT payload)
+        const newTokenVersion = (user.tokenVersion || 0) + 1;
+        
+        // Update email and clear pending fields
+        await Users.findOneAndUpdate(
+            { username: req.query.user },
+            { 
+                $set: { 
+                    email: user.pendingEmail,
+                    tokenVersion: newTokenVersion
+                },
+                $unset: { 
+                    pendingEmail: "",
+                    pendingEmailToken: "",
+                    pendingEmailExpires: ""
+                }
+            }
+        );
+        
+        // Get updated user and create new JWT with new email
+        const updatedUser = await getUserByUsername(req.query.user);
+        const jwtToken = createToken(updatedUser);
+        
+        // Set new JWT token cookie
+        res.cookie("username", req.query.user, { 
+            maxAge: ms("30 days")
+        });
+        res.cookie("token", jwtToken, { 
+            maxAge: ms("30 days"),
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax'
+        });
+        
+        makeReport(JSON.stringify({
+            embeds: [{
+                type: 'rich',
+                title: '✅ Email Changed Successfully',
+                description: `User ${req.query.user} successfully verified and changed their email`,
+                color: 0x00FF00,
+                fields: [
+                    {
+                        name: 'User',
+                        value: req.query.user,
+                        inline: true
+                    }
+                ]
+            }]
+        }));
+        
+        // Notify old email about successful change
+        sendEmail(oldEmail, "InfiniMii Email Changed", `Hi ${req.query.user}, your email has been successfully changed on InfiniMii. If this was not you, please contact support immediately by replying to this email.`);
+        
+        res.redirect(`/user/${encodeURIComponent(req.query.user)}`);
+    }
+    else {
+        return await sendError(res, req, "Invalid verification token", 400);
+    }
+});
+
 site.post('/deleteMii', async (req, res) => { // TODO: csrf here, make post
     if (!req.user) {
         res.json({error: "Not logged in"});
@@ -3670,53 +3761,41 @@ site.get('/cite', async (req, res) => {
 // Change Email (User)
 site.post('/changeEmail', requireAuth, async (req, res) => {
     try {
-        const { oldEmail, newEmail } = req.body;
-
-        // Verify old email matches
-        if (req.user.email !== oldEmail) {
-            return res.json({ error: 'Old email does not match' });
-        }
+        const { newEmail } = req.body;
+        const oldEmail = req.user.email;
 
         // Basic email validation
+        // TODO: real email validation with library
         if (!newEmail || !newEmail.includes('@') || !newEmail.includes('.')) {
             return res.json({ error: 'Invalid email format' });
         }
 
+        // Check if new email is same as current
+        if (req.user.email === newEmail) {
+            return res.json({ error: 'New email is the same as current email' });
+        }
+
         var token = genToken();
-        let link = "https://infinimii.com/verify?user=" + encodeURIComponent(req.cookies.username) + "&token=" + encodeURIComponent(token);
+        let link = "https://infinimii.com/verifyEmailChange?user=" + encodeURIComponent(req.cookies.username) + "&token=" + encodeURIComponent(token);
         
-        // Increment token version to invalidate old JWTs (security - email is in JWT payload)
-        const newTokenVersion = (req.user.tokenVersion || 0) + 1;
-        
+        // Store pending email and verification token, but keep current email active
+        // This way user can still login with their account even if they enter wrong email
         await Users.findOneAndUpdate(
             { username: req.cookies.username },
             { 
                 $set: { 
-                    email: newEmail,
-                    verified: false,
-                    verificationToken: hashPassword(token, req.user.salt).hash,
-                    tokenVersion: newTokenVersion
+                    pendingEmail: newEmail,
+                    pendingEmailToken: hashPassword(token, req.user.salt).hash,
+                    pendingEmailExpires: Date.now() + ms("24h")
                 }
             }
-        ); // TODO_HIGH: this would brick your account if you send to a false email...
-        
-        // Get updated user and create new JWT with new email
-        const updatedUser = await getUserByUsername(req.cookies.username);
-        const newToken = createToken(updatedUser);
-        
-        // Set new JWT token cookie
-        res.cookie('token', newToken, {
-            maxAge: ms("30 days"),
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'lax'
-        });
+        );
 
         makeReport(JSON.stringify({
             embeds: [{
                 type: 'rich',
-                title: '📧 Email Changed',
-                description: `User ${req.cookies.username} changed their email`,
+                title: '📧 Email Change Requested',
+                description: `User ${req.cookies.username} requested to change their email`,
                 color: 0x00CCFF,
                 fields: [
                     {
@@ -3728,8 +3807,8 @@ site.post('/changeEmail', requireAuth, async (req, res) => {
             }]
         }));
 
-        sendEmail(oldEmail, "InfiniMii Verification", `Hi ${req.cookies.username}, we received a request to change your email on InfiniMii. If this was not you, please reply to this email to receive support.`);
-        sendEmail(newEmail, "InfiniMii Verification", `Hi ${req.cookies.username}, we received a request to change your email on InfiniMii. Please verify your email by clicking this link: ${link}. If this was not you, please reply to this email to receive support.`);
+        sendEmail(oldEmail, "InfiniMii Email Change Request", `Hi ${req.cookies.username}, we received a request to change your email on InfiniMii. If this was not you, please reply to this email to receive support.`);
+        sendEmail(newEmail, "InfiniMii Email Verification", `Hi ${req.cookies.username}, we received a request to change your email on InfiniMii. Please verify your new email by clicking this link: ${link}. This link will expire in 24 hours. If this was not you, please ignore this email.`);
 
 
         res.json({ okay: true });
@@ -5065,7 +5144,7 @@ site.post('/login', async (req, res) => {
         }
         else {
             res.json({ error: "Email not verified yet" }); 
-            // TODO: should this prevent login until email validated? Maybe add a resend code button. 
+            // TODO: should this prevent login until email validated? Maybe add a resend code button.
             // TODO: if email is never validated, the username is lost... give them maybe 24 hours to verify their email before deleting the account...
             return;
         }

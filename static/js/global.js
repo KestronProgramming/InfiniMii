@@ -12,9 +12,158 @@ function likeMii(el,id,highlightedMii,mod){
 		}
 	});
 }
+
+// Custom Modal System
+let modalOverlay = null;
+
+function createModalOverlay() {
+    if (!modalOverlay) {
+        modalOverlay = document.createElement('div');
+        modalOverlay.className = 'custom-modal-overlay';
+        document.body.appendChild(modalOverlay);
+    }
+    return modalOverlay;
+}
+
+function closeModal() {
+    const overlay = document.querySelector('.custom-modal-overlay');
+    if (overlay) {
+        overlay.classList.remove('active');
+        setTimeout(() => {
+            overlay.innerHTML = '';
+        }, 200);
+    }
+}
+
+/**
+ * Show a confirmation dialog with custom message
+ * @param {string} message - The message to display
+ * @param {Function} onConfirm - Callback function to run when user confirms
+ * @param {Function} onCancel - Optional callback function to run when user cancels
+ * @param {Object} options - Optional configuration
+ * @param {string} options.title - Modal title (default: "Confirm")
+ * @param {string} options.confirmText - Confirm button text (default: "Confirm")
+ * @param {string} options.cancelText - Cancel button text (default: "Cancel")
+ */
+function showConfirm(message, onConfirm, onCancel = null, options = {}) {
+    const overlay = createModalOverlay();
+    
+    const title = options.title || 'Confirm';
+    const confirmText = options.confirmText || 'Confirm';
+    const cancelText = options.cancelText || 'Cancel';
+    
+    // TODO: Low importance for now but redo this without needing innerHTML
+    overlay.innerHTML = `
+        <div class="custom-modal">
+            <div class="custom-modal-header">
+                <h3>${title}</h3>
+                <button class="custom-modal-close" aria-label="Close">&times;</button>
+            </div>
+            <div class="custom-modal-body">${message}</div>
+            <div class="custom-modal-footer">
+                <button class="custom-modal-btn custom-modal-btn-secondary" data-action="cancel">${cancelText}</button>
+                <button class="custom-modal-btn custom-modal-btn-primary" data-action="confirm">${confirmText}</button>
+            </div>
+        </div>
+    `;
+    
+    const closeBtn = overlay.querySelector('.custom-modal-close');
+    const confirmBtn = overlay.querySelector('[data-action="confirm"]');
+    const cancelBtn = overlay.querySelector('[data-action="cancel"]');
+    
+    const handleClose = () => {
+        closeModal();
+        if (onCancel) onCancel();
+    };
+    
+    const handleConfirm = () => {
+        closeModal();
+        if (onConfirm) onConfirm();
+    };
+    
+    closeBtn.addEventListener('click', handleClose);
+    cancelBtn.addEventListener('click', handleClose);
+    confirmBtn.addEventListener('click', handleConfirm);
+    
+    // Close on overlay click
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) handleClose();
+    });
+    
+    // Close on Escape key
+    const handleEscape = (e) => {
+        if (e.key === 'Escape') {
+            handleClose();
+            document.removeEventListener('keydown', handleEscape);
+        }
+    };
+    document.addEventListener('keydown', handleEscape);
+    
+    // Show modal
+    setTimeout(() => overlay.classList.add('active'), 10);
+    confirmBtn.focus();
+}
+
+/**
+ * Show an alert dialog with auto-dismiss
+ * @param {string} message - The message to display
+ * @param {number} duration - Duration in milliseconds before auto-dismiss (default: 5000)
+ * @param {Object} options - Optional configuration
+ * @param {string} options.title - Modal title (default: "Notice")
+ * @param {string} options.type - Alert type: 'info', 'success', 'error' (default: 'info')
+ */
+function showAlert(message, duration = 5000, options = {}) {
+    const overlay = createModalOverlay();
+    
+    const title = options.title || 'Notice';
+    const type = options.type || 'info';
+    
+    overlay.className = 'custom-modal-overlay custom-modal-alert';
+    overlay.innerHTML = `
+        <div class="custom-modal">
+            <div class="custom-modal-header">
+                <h3>${title}</h3>
+                <button class="custom-modal-close" aria-label="Close">&times;</button>
+            </div>
+            <div class="custom-modal-body">${message}</div>
+            <div class="custom-modal-timer" style="animation-duration: ${duration}ms;"></div>
+        </div>
+    `;
+    
+    const closeBtn = overlay.querySelector('.custom-modal-close');
+    
+    const handleClose = () => {
+        closeModal();
+        if (autoCloseTimeout) clearTimeout(autoCloseTimeout);
+    };
+    
+    closeBtn.addEventListener('click', handleClose);
+    
+    // Close on overlay click
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) handleClose();
+    });
+    
+    // Close on Escape key
+    const handleEscape = (e) => {
+        if (e.key === 'Escape') {
+            handleClose();
+            document.removeEventListener('keydown', handleEscape);
+        }
+    };
+    document.addEventListener('keydown', handleEscape);
+    
+    // Show modal
+    setTimeout(() => overlay.classList.add('active'), 10);
+    
+    // Auto-close after duration
+    const autoCloseTimeout = setTimeout(() => {
+        handleClose();
+    }, duration);
+}
+
 function deleteMii(id){
-	var youSure=confirm("Are you sure you want to delete this Mii?");
-	if(youSure){
+	showConfirm("Are you sure you want to delete this Mii?", () => {
 		fetch("/deleteMii?id="+id).then(d=>d.json()).then(d=>{
 			if(d.error){
 				const errorDiv = document.getElementById('delete-error-message');
@@ -24,14 +173,14 @@ function deleteMii(id){
 					errorDiv.style.display = 'block';
 				} else {
 					// Ideally not used
-					alert(d.error);
+					showAlert(d.error, 5000, { title: 'Error', type: 'error' });
 				}
 			}
 			else{
 				document.getElementById(id).remove();
 			}
 		});
-	}
+	});
 }
 function highlightedMiiChange(){
     fetch("/changeHighlightedMii", {
@@ -45,7 +194,7 @@ function highlightedMiiChange(){
             location.reload();
         }
         else{
-            alert(d.error);
+            showAlert(d.error, 5000, { title: 'Error', type: 'error' });
         }
     });
 }

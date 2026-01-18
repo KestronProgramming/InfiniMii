@@ -232,22 +232,20 @@
                         selectedRoles.push('basic');
                     }
 
-                    const confirmed = confirm(`Update ${targetUsername}'s roles to:\n${selectedRoles.join(', ')}\n\nAre you sure?`);
-                    if (!confirmed) return;
+                    showConfirm(`Update ${targetUsername}'s roles to:\n${selectedRoles.join(', ')}\n\nAre you sure?`, async () => {
+                        try {
+                            // Remove all current non-basic roles
+                            // <% debugger %>
+                            const currentRoles = <%- JSON.stringify(targetUser.roles) %>;
+                            // TODO: make sure this works - I think user should be the user being looked at... not the current user
 
-                    try {
-                        // Remove all current non-basic roles
-                        // <% debugger %>
-                        const currentRoles = <%- JSON.stringify(targetUser.roles) %>;
-                        // TODO: make sure this works - I think user should be the user being looked at... not the current user
+                            // Calculate roles to remove
+                            const rolesToRemove = currentRoles.filter(r => r !== 'basic' && !selectedRoles.includes(r));
 
-                        // Calculate roles to remove
-                        const rolesToRemove = currentRoles.filter(r => r !== 'basic' && !selectedRoles.includes(r));
+                            // Calculate roles to add
+                            const rolesToAdd = selectedRoles.filter(r => !currentRoles.includes(r));
 
-                        // Calculate roles to add
-                        const rolesToAdd = selectedRoles.filter(r => !currentRoles.includes(r));
-
-                        // Remove old roles
+                            // Remove old roles
                         for (const role of rolesToRemove) {
                             const response = await fetch('/removeUserRole', {
                                 method: 'POST',
@@ -291,166 +289,164 @@
                     const reason = document.getElementById('tempBanReason').value;
 
                     if (!hours || hours < 1) {
-                        alert('Please enter a valid number of hours');
+                        showAlert('Please enter a valid number of hours', 5000, { title: 'Error', type: 'error' });
                         return;
                     }
 
-                    const confirmed = confirm(`Are you sure you want to temporarily ban ${targetUsername} for ${hours} hours?\n\nReason: ${reason || 'No reason provided'}`);
-                    if (!confirmed) return;
+                    showConfirm(`Are you sure you want to temporarily ban ${targetUsername} for ${hours} hours?\n\nReason: ${reason || 'No reason provided'}`, async () => {
+                        try {
+                            const response = await fetch('/tempBanUser', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ username: targetUsername, hours, reason })
+                            });
 
-                    try {
-                        const response = await fetch('/tempBanUser', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ username: targetUsername, hours, reason })
-                        });
+                            const result = await response.json();
 
-                        const result = await response.json();
-
-                        if (!result.error) {
-                            alert(`User temporarily banned for ${hours} hours`);
-                            location.reload();
+                            if (!result.error) {
+                                showAlert(`User temporarily banned for ${hours} hours`, 3000, { title: 'Success', type: 'success' });
+                                setTimeout(() => location.reload(), 3000);
+                            }
+                            else {
+                                showAlert(`Error: ${result.error}`, 5000, { title: 'Error', type: 'error' });
+                            }
+                        } catch (error) {
+                            console.error('Error:', error);
+                            showAlert('Failed to ban user', 5000, { title: 'Error', type: 'error' });
                         }
-                        else {
-                            alert(`Error: ${result.error}`);
-                        }
-                    } catch (error) {
-                        console.error('Error:', error);
-                        alert('Failed to ban user');
-                    }
+                    }, null, { title: 'Temporary Ban', confirmText: 'Ban User' });
                 }
 
                 async function permBanUser() {
                     const reason = document.getElementById('permBanReason').value;
 
-                    const confirmed = confirm(`⚠️ WARNING ⚠️\n\nAre you ABSOLUTELY SURE you want to PERMANENTLY BAN ${targetUsername}?\n\nThis will:\n- Delete their account\n- Delete ALL their Miis (${'<%= displayedMiis.length %>'})\n- Ban their IP address from creating new accounts\n\nThis action CANNOT be undone!\n\nReason: ${reason || 'No reason provided'}`);
-
-                    if (!confirmed) return;
-
-                    const doubleCheck = prompt(`Type "PERMANENT BAN" to confirm:`);
-                    if (doubleCheck !== 'PERMANENT BAN') {
-                        alert('Permanent ban cancelled.');
-                        return;
-                    }
-
-                    try {
-                        const response = await fetch('/permBanUser', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ username: targetUsername, reason })
-                        });
-
-                        const result = await response.json();
-
-                        if (!result.error) {
-                            alert('User permanently banned and deleted');
-                            window.location.href = '/';
+                    showConfirm(`⚠️ WARNING ⚠️\n\nAre you ABSOLUTELY SURE you want to PERMANENTLY BAN ${targetUsername}?\n\nThis will:\n- Delete their account\n- Delete ALL their Miis (${'<%= displayedMiis.length %>'})\n- Ban their IP address from creating new accounts\n\nThis action CANNOT be undone!\n\nReason: ${reason || 'No reason provided'}`, () => {
+                        const doubleCheck = prompt(`Type "PERMANENT BAN" to confirm:`);
+                        if (doubleCheck !== 'PERMANENT BAN') {
+                            showAlert('Permanent ban cancelled.', 3000, { title: 'Cancelled' });
+                            return;
                         }
-                        else {
-                            alert(`Error: ${result.error}`);
-                        }
-                    } catch (error) {
-                        console.error('Error:', error);
-                        alert('Failed to permanently ban user');
-                    }
+
+                        (async () => {
+                            try {
+                                const response = await fetch('/permBanUser', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ username: targetUsername, reason })
+                                });
+
+                                const result = await response.json();
+
+                                if (!result.error) {
+                                    showAlert('User permanently banned and deleted', 2000, { title: 'Success', type: 'success' });
+                                    setTimeout(() => window.location.href = '/', 2000);
+                                }
+                                else {
+                                    showAlert(`Error: ${result.error}`, 5000, { title: 'Error', type: 'error' });
+                                }
+                            } catch (error) {
+                                console.error('Error:', error);
+                                showAlert('Failed to permanently ban user', 5000, { title: 'Error', type: 'error' });
+                            }
+                        })();
+                    }, null, { title: '⚠️ PERMANENT BAN', confirmText: 'Continue' });
                 }
 
                 async function deleteAllUserMiis() {
-                    const confirmed = confirm(`Are you sure you want to delete ALL ${'<%= displayedMiis.length %>'} Miis from ${targetUsername}?\n\nThis action CANNOT be undone!`);
-                    if (!confirmed) return;
-
-                    const doubleCheck = prompt(`Type "DELETE ALL" to confirm:`);
-                    if (doubleCheck !== 'DELETE ALL') {
-                        alert('Deletion cancelled.');
-                        return;
-                    }
-
-                    try {
-                        const response = await fetch('/deleteAllUserMiis', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ username: targetUsername })
-                        });
-
-                        const result = await response.json();
-
-                        if (!result.error) {
-                            alert(`Deleted ${result.deletedCount} Miis`);
-                            location.reload();
+                    showConfirm(`Are you sure you want to delete ALL ${'<%= displayedMiis.length %>'} Miis from ${targetUsername}?\n\nThis action CANNOT be undone!`, () => {
+                        const doubleCheck = prompt(`Type "DELETE ALL" to confirm:`);
+                        if (doubleCheck !== 'DELETE ALL') {
+                            showAlert('Deletion cancelled.', 3000, { title: 'Cancelled' });
+                            return;
                         }
-                        else {
-                            alert(`Error: ${result.error}`);
-                        }
-                    } catch (error) {
-                        console.error('Error:', error);
-                        alert('Failed to delete Miis');
-                    }
+
+                        (async () => {
+                            try {
+                                const response = await fetch('/deleteAllUserMiis', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ username: targetUsername })
+                                });
+
+                                const result = await response.json();
+
+                                if (!result.error) {
+                                    showAlert(`Deleted ${result.deletedCount} Miis`, 3000, { title: 'Success', type: 'success' });
+                                    setTimeout(() => location.reload(), 3000);
+                                }
+                                else {
+                                    showAlert(`Error: ${result.error}`, 5000, { title: 'Error', type: 'error' });
+                                }
+                            } catch (error) {
+                                console.error('Error:', error);
+                                showAlert('Failed to delete Miis', 5000, { title: 'Error', type: 'error' });
+                            }
+                        })();
+                    }, null, { title: 'Delete All Miis', confirmText: 'Continue' });
                 }
 
                 async function changeUsername() {
                     const newUsername = document.getElementById('newUsername').value;
 
                     if (!newUsername || newUsername === targetUsername) {
-                        alert('Please enter a new username');
+                        showAlert('Please enter a new username', 5000, { title: 'Error', type: 'error' });
                         return;
                     }
 
-                    const confirmed = confirm(`Are you sure you want to change username from "${targetUsername}" to "${newUsername}"?`);
-                    if (!confirmed) return;
+                    showConfirm(`Are you sure you want to change username from "${targetUsername}" to "${newUsername}"?`, async () => {
+                        try {
+                            const response = await fetch('/changeUsername', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ oldUsername: targetUsername, newUsername })
+                            });
 
-                    try {
-                        const response = await fetch('/changeUsername', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ oldUsername: targetUsername, newUsername })
-                        });
+                            const result = await response.json();
 
-                        const result = await response.json();
-
-                        if (!result.error) {
-                            alert('Username changed successfully!');
-                            window.location.href = `/user/${encodeURIComponent(newUsername)}`;
+                            if (!result.error) {
+                                showAlert('Username changed successfully!', 2000, { title: 'Success', type: 'success' });
+                                setTimeout(() => window.location.href = `/user/${encodeURIComponent(newUsername)}`, 2000);
+                            }
+                            else {
+                                showAlert(`Error: ${result.error}`, 5000, { title: 'Error', type: 'error' });
+                            }
+                        } catch (error) {
+                            console.error('Error:', error);
+                            showAlert('Failed to change username', 5000, { title: 'Error', type: 'error' });
                         }
-                        else {
-                            alert(`Error: ${result.error}`);
-                        }
-                    } catch (error) {
-                        console.error('Error:', error);
-                        alert('Failed to change username');
-                    }
+                    }, null, { title: 'Change Username', confirmText: 'Change' });
                 }
 
                 async function changeUserPfp() {
                     const newPfp = document.getElementById('newPfp').value;
 
                     if (!newPfp) {
-                        alert('Please enter a Mii ID');
+                        showAlert('Please enter a Mii ID', 5000, { title: 'Error', type: 'error' });
                         return;
                     }
 
-                    const confirmed = confirm(`Are you sure you want to change ${targetUsername}'s profile picture to Mii ID: ${newPfp}?`);
-                    if (!confirmed) return;
+                    showConfirm(`Are you sure you want to change ${targetUsername}'s profile picture to Mii ID: ${newPfp}?`, async () => {
+                        try {
+                            const response = await fetch('/changeUserPfp', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ username: targetUsername, miiId: newPfp })
+                            });
 
-                    try {
-                        const response = await fetch('/changeUserPfp', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ username: targetUsername, miiId: newPfp })
-                        });
+                            const result = await response.json();
 
-                        const result = await response.json();
-
-                        if (!result.error) {
-                            alert('Profile picture changed successfully!');
-                            location.reload();
+                            if (!result.error) {
+                                showAlert('Profile picture changed successfully!', 3000, { title: 'Success', type: 'success' });
+                                setTimeout(() => location.reload(), 3000);
+                            }
+                            else {
+                                showAlert(`Error: ${result.error}`, 5000, { title: 'Error', type: 'error' });
+                            }
+                        } catch (error) {
+                            console.error('Error:', error);
+                            showAlert('Failed to change profile picture', 5000, { title: 'Error', type: 'error' });
                         }
-                        else {
-                            alert(`Error: ${result.error}`);
-                        }
-                    } catch (error) {
-                        console.error('Error:', error);
-                        alert('Failed to change profile picture');
-                    }
+                    }, null, { title: 'Change Profile Picture', confirmText: 'Change' });
                 }
             </script>
         <% } %>

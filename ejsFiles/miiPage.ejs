@@ -147,7 +147,7 @@
                                     const loaded = await loadCategoriesForEditor();
                                     
                                     if (!loaded) {
-                                        alert('Error loading categories');
+                                        showAlert('Error loading categories', 5000, { title: 'Error', type: 'error' });
                                         return;
                                     }
                                     
@@ -303,14 +303,14 @@
                                         const data = await response.json();
                                         
                                         if (!data.error) {
-                                            alert('Categories updated successfully!');
-                                            window.location.reload();
+                                            showAlert('Categories updated successfully!', 3000, { title: 'Success', type: 'success' });
+                                            setTimeout(() => window.location.reload(), 3000);
                                         } else {
-                                            alert('Error: ' + (data.error || 'Failed to update categories'));
+                                            showAlert('Error: ' + (data.error || 'Failed to update categories'), 5000, { title: 'Error', type: 'error' });
                                         }
                                     } catch (error) {
                                         console.error('Error:', error);
-                                        alert('Error updating categories');
+                                        showAlert('Error updating categories', 5000, { title: 'Error', type: 'error' });
                                     }
                                 }
                                 </script>
@@ -831,10 +831,10 @@
                 
                 try {
                     await navigator.clipboard.writeText(text);
-                    alert('Instructions copied to clipboard!');
+                    showAlert('Instructions copied to clipboard!', 3000, { title: 'Success', type: 'success' });
                 } catch (error) {
                     console.error('Error copying instructions:', error);
-                    alert('Failed to copy instructions');
+                    showAlert('Failed to copy instructions', 5000, { title: 'Error', type: 'error' });
                 }
             }
 
@@ -865,36 +865,36 @@
                         
                         const result = await response.json();
                         if (!result.error) {
-                            alert('Mii blocked from publishing');
-                            location.reload();
+                            showAlert('Mii blocked from publishing', 3000, { title: 'Success', type: 'success' });
+                            setTimeout(() => location.reload(), 3000);
                         } else {
-                            alert('Error: ' + (result.error || 'Failed to block Mii'));
+                            showAlert('Error: ' + (result.error || 'Failed to block Mii'), 5000, { title: 'Error', type: 'error' });
                         }
                     } catch (error) {
-                        alert('Error blocking Mii');
+                        showAlert('Error blocking Mii', 5000, { title: 'Error', type: 'error' });
                     }
                 }
                 
                 async function unblockMiiFromPublishing() {
-                    if (!confirm('Unblock this Mii from publishing?')) return;
-                    
-                    try {
-                        const response = await fetch('/unblockMiiFromPublishing', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ miiId: '<%= mii.id %>' })
-                        });
-                        
-                        const result = await response.json();
-                        if (!result.error) {
-                            alert('Mii unblocked');
-                            location.reload();
-                        } else {
-                            alert('Error: ' + (result.error || 'Failed to unblock Mii'));
+                    showConfirm('Unblock this Mii from publishing?', async () => {
+                        try {
+                            const response = await fetch('/unblockMiiFromPublishing', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ miiId: '<%= mii.id %>' })
+                            });
+                            
+                            const result = await response.json();
+                            if (!result.error) {
+                                showAlert('Mii unblocked', 3000, { title: 'Success', type: 'success' });
+                                setTimeout(() => location.reload(), 3000);
+                            } else {
+                                showAlert('Error: ' + (result.error || 'Failed to unblock Mii'), 5000, { title: 'Error', type: 'error' });
+                            }
+                        } catch (error) {
+                            showAlert('Error unblocking Mii', 5000, { title: 'Error', type: 'error' });
                         }
-                    } catch (error) {
-                        alert('Error unblocking Mii');
-                    }
+                    }, null, { title: 'Unblock Mii', confirmText: 'Unblock' });
                 }
                 function toggleModTools() {
                     const content = document.getElementById('modToolsContent');
@@ -906,137 +906,134 @@
 
                 async function updateMiiField(field, value) {
                     if (!value || value.trim() === '') {
-                        alert('Please enter a valid value');
+                        showAlert('Please enter a valid value', 5000, { title: 'Error', type: 'error' });
                         return;
                     }
 
-                    const confirmed = confirm(`Are you sure you want to update the ${field}?`);
-                    if (!confirmed) return;
+                    showConfirm(`Are you sure you want to update the ${field}?`, async () => {
+                        try {
+                            const response = await fetch('/updateMiiField', {
+                                method: 'POST',
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                    id: '<%= mii.id %>',
+                                    field: field,
+                                    value: value
+                                })
+                            });
 
-                    try {
-                        const response = await fetch('/updateMiiField', {
-                            method: 'POST',
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({
-                                id: '<%= mii.id %>',
-                                field: field,
-                                value: value
-                            })
-                        });
-
-                        const result = await response.json();
-                        
-                        if (!result.error) {
-                            alert(`Successfully updated ${field}!`);
-                            location.reload();
+                            const result = await response.json();
+                            
+                            if (!result.error) {
+                                showAlert(`Successfully updated ${field}!`, 3000, { title: 'Success', type: 'success' });
+                                setTimeout(() => location.reload(), 3000);
+                            }
+                            else {
+                                showAlert(`Error: ${result.error || 'Unknown error'}`, 5000, { title: 'Error', type: 'error' });
+                            }
                         }
-                        else {
-                            alert(`Error: ${result.error || 'Unknown error'}`);
+                        catch (error) {
+                            console.error('Error:', error);
+                            showAlert('Failed to update. Please try again.', 5000, { title: 'Error', type: 'error' });
                         }
-                    }
-                    catch (error) {
-                        console.error('Error:', error);
-                        alert('Failed to update. Please try again.');
-                    }
+                    }, null, { title: 'Update Field', confirmText: 'Update' });
                 }
 
                 async function regenerateQR() {
-                    const confirmed = confirm('Are you sure you want to regenerate the QR code?');
-                    if (!confirmed) return;
+                    showConfirm('Are you sure you want to regenerate the QR code?', async () => {
+                        const statusEl = document.getElementById('qrStatus');
+                        statusEl.textContent = 'Regenerating...';
+                        statusEl.style.color = '#FFA500';
 
-                    const statusEl = document.getElementById('qrStatus');
-                    statusEl.textContent = 'Regenerating...';
-                    statusEl.style.color = '#FFA500';
-
-                    try {
-                        const response = await fetch('/regenerateQR', {
-                            method: "POST",
-                            body: JSON.stringify({ id: "<%= mii.id %>" })
-                            headers: { "Content-Type": "application/json" },
-                        });
-                        const result = await response.json();
-                        
-                        if (!result.error) {
-                            statusEl.textContent = '✓ Done!';
-                            statusEl.style.color = '#4CAF50';
-                            setTimeout(() => {
-                                location.reload();
-                            }, 1000);
+                        try {
+                            const response = await fetch('/regenerateQR', {
+                                method: "POST",
+                                body: JSON.stringify({ id: "<%= mii.id %>" })
+                                headers: { "Content-Type": "application/json" },
+                            });
+                            const result = await response.json();
+                            
+                            if (!result.error) {
+                                statusEl.textContent = '✓ Done!';
+                                statusEl.style.color = '#4CAF50';
+                                setTimeout(() => {
+                                    location.reload();
+                                }, 1000);
+                            }
+                            else {
+                                statusEl.textContent = `✗ Error: ${result.error}`;
+                                statusEl.style.color = '#f44336';
+                            }
                         }
-                        else {
-                            statusEl.textContent = `✗ Error: ${result.error}`;
+                        catch (error) {
+                            console.error('Error:', error);
+                            statusEl.textContent = '✗ Failed';
                             statusEl.style.color = '#f44336';
                         }
-                    }
-                    catch (error) {
-                        console.error('Error:', error);
-                        statusEl.textContent = '✗ Failed';
-                        statusEl.style.color = '#f44336';
-                    }
+                    }, null, { title: 'Regenerate QR Code', confirmText: 'Regenerate' });
                 }
 
                 async function confirmDeleteMii() {
                     const miiName = '<%= mii.meta.name %>';
-                    const confirmed = confirm(`Are you ABSOLUTELY SURE you want to DELETE the Mii "${miiName}"?\n\nThis action CANNOT be undone!`);
-                    
-                    if (!confirmed) return;
-
-                    const doubleCheck = prompt(`Type "DELETE" to confirm deletion of ${miiName}:`);
-                    if (doubleCheck !== 'DELETE') {
-                        alert('Deletion cancelled.');
-                        return;
-                    }
-
-                    try {
-                        const response = await fetch('/deleteMii?id=<%= mii.id %>', {
-                            headers: { "Content-Type": "application/json" },
-                        });
-                        const result = await response.json();
-                        
-                        if (!result.error) {
-                            alert('Mii deleted successfully');
-                            window.location.href = result.redirect;
+                    showConfirm(`Are you ABSOLUTELY SURE you want to DELETE the Mii "${miiName}"?\n\nThis action CANNOT be undone!`, () => {
+                        const doubleCheck = prompt(`Type "DELETE" to confirm deletion of ${miiName}:`);
+                        if (doubleCheck !== 'DELETE') {
+                            showAlert('Deletion cancelled.', 3000, { title: 'Cancelled' });
+                            return;
                         }
-                        else {
-                            alert('Error deleting Mii');
-                        }
-                    }
-                    catch (error) {
-                        console.error('Error:', error);
-                        alert('Failed to delete Mii');
-                    }
+
+                        (async () => {
+                            try {
+                                const response = await fetch('/deleteMii?id=<%= mii.id %>', {
+                                    headers: { "Content-Type": "application/json" },
+                                });
+                                const result = await response.json();
+                                
+                                if (!result.error) {
+                                    showAlert('Mii deleted successfully', 2000, { title: 'Success', type: 'success' });
+                                    setTimeout(() => window.location.href = result.redirect, 2000);
+                                }
+                                else {
+                                    showAlert('Error deleting Mii', 5000, { title: 'Error', type: 'error' });
+                                }
+                            }
+                            catch (error) {
+                                console.error('Error:', error);
+                                showAlert('Failed to delete Mii', 5000, { title: 'Error', type: 'error' });
+                            }
+                        })();
+                    }, null, { title: '⚠️ Delete Mii', confirmText: 'Continue' });
                 }
 
                 async function toggleOfficial() {
                     const isOfficial = document.getElementById('officialCheckbox').checked;
                     
-                    const confirmed = confirm(`Are you sure you want to mark this Mii as ${isOfficial ? 'OFFICIAL' : 'NOT OFFICIAL'}?\n\nOfficial Miis are shown with a special badge.`);
-                    if (!confirmed) return;
+                    showConfirm(`Are you sure you want to mark this Mii as ${isOfficial ? 'OFFICIAL' : 'NOT OFFICIAL'}?\n\nOfficial Miis are shown with a special badge.`, async () => {
+                        try {
+                            const response = await fetch('/toggleMiiOfficial', {
+                                method: 'POST',
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                    id: '<%= mii.id %>',
+                                    official: isOfficial
+                                })
+                            });
 
-                    try {
-                        const response = await fetch('/toggleMiiOfficial', {
-                            method: 'POST',
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({
-                                id: '<%= mii.id %>',
-                                official: isOfficial
-                            })
-                        });
-
-                        const result = await response.json();
-                        
-                        if (!result.error) {
-                            alert(`Mii official status updated!`);
-                            location.reload();
+                            const result = await response.json();
+                            
+                            if (!result.error) {
+                                showAlert(`Mii official status updated!`, 3000, { title: 'Success', type: 'success' });
+                                setTimeout(() => location.reload(), 3000);
+                            }
+                            else {
+                                showAlert(`Error: ${result.error || 'Unknown error'}`, 5000, { title: 'Error', type: 'error' });
+                            }
+                        } 
+                        catch (error) {
+                            console.error('Error:', error);
+                            showAlert('Failed to update official status', 5000, { title: 'Error', type: 'error' });
                         }
-                        else {
-                            alert(`Error: ${result.error || 'Unknown error'}`);
-                        }
-                    } 
-                    catch (error) {
-                        console.error('Error:', error);
-                        alert('Failed to update official status');
-                    }
+                    }, null, { title: 'Toggle Official Status', confirmText: 'Update' });
             }
             </script>
         <% } %>

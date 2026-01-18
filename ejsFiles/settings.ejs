@@ -40,7 +40,6 @@
 					<!-- Change Email -->
 					<div class="setting-group">
 						<label>Email Address</label>
-						<input type="email" placeholder="Old Email" id="oEmail">
 						<input type="email" placeholder="New Email" id="nEmail">
 						<button onclick="changeEmail()">Change Email</button>
 					</div>
@@ -154,10 +153,9 @@
 			}
 
 			async function changeEmail() {
-				const oldEmail = document.getElementById('oEmail').value;
 				const newEmail = document.getElementById('nEmail').value;
 
-				if (!oldEmail || !newEmail) {
+				if (!newEmail) {
 					alert('Please fill in both old and new email');
 					return;
 				}
@@ -166,14 +164,13 @@
 					const response = await fetch('/changeEmail', {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({ oldEmail, newEmail })
+						body: JSON.stringify({ newEmail })
 					});
 
 					const result = await response.json();
 					
 					if (!result.error) {
 						alert('Email changed successfully!');
-						document.getElementById('oEmail').value = '';
 						document.getElementById('nEmail').value = '';
 					}
                     else {
